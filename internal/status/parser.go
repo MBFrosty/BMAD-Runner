@@ -139,9 +139,11 @@ func (s *SprintStatus) NextWork() (action, epicKey, storyKey string, found bool)
 
 	// No pending stories: run retrospective only for the last epic that needs it.
 	// Skip retros for "passed" epics (we're focused on a later epic).
+	// Treat both "done" and "completed" as finished (BMAD may use either).
 	for i := len(groups) - 1; i >= 0; i-- {
 		g := groups[i]
-		if g.RetroKey != "" && g.RetroStatus != "completed" {
+		retroComplete := g.RetroStatus == "done" || g.RetroStatus == "completed"
+		if g.RetroKey != "" && !retroComplete {
 			return "retrospective", g.EpicKey, "", true
 		}
 	}
