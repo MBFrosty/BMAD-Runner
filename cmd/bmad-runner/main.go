@@ -33,7 +33,7 @@ func main() {
 		&cli.StringFlag{
 			Name:    "agent-type",
 			Aliases: []string{"t"},
-			Usage:   "Agent backend: cursor-agent or claude-code",
+			Usage:   "Agent backend: cursor-agent, claude-code, or gemini-cli",
 			Value:   "cursor-agent",
 		},
 		&cli.StringFlag{
@@ -54,7 +54,7 @@ func main() {
 
 	app := &cli.App{
 		Name:                   "bmad-runner",
-		Usage:                  "Orchestrate BMAD workflow phases (create-story → dev-story → code-review) using cursor-agent or claude-code",
+		Usage:                  "Orchestrate BMAD workflow phases (create-story → dev-story → code-review) using cursor-agent, claude-code, or gemini-cli",
 		UseShortOptionHandling: true,
 		Commands: []*cli.Command{
 			{
@@ -369,14 +369,20 @@ func resolveAgentType(s string) string {
 	switch s {
 	case config.AgentTypeClaudeCode:
 		return config.AgentTypeClaudeCode
+	case config.AgentTypeGeminiCLI:
+		return config.AgentTypeGeminiCLI
 	default:
 		return config.AgentTypeCursorAgent
 	}
 }
 
 func defaultModelForAgentType(agentType string) string {
-	if agentType == config.AgentTypeClaudeCode {
+	switch agentType {
+	case config.AgentTypeClaudeCode:
 		return "sonnet"
+	case config.AgentTypeGeminiCLI:
+		return "gemini-3-pro-preview"
+	default:
+		return "composer-1.5"
 	}
-	return "composer-1.5"
 }

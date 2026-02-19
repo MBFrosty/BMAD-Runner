@@ -41,6 +41,7 @@ func ResolveProjectRoot(statusFile string, projectRootOverride string) (string, 
 const (
 	AgentTypeCursorAgent = "cursor-agent"
 	AgentTypeClaudeCode  = "claude-code"
+	AgentTypeGeminiCLI   = "gemini-cli"
 )
 
 // LookupAgent looks for the appropriate agent binary based on agentType.
@@ -54,6 +55,8 @@ func LookupAgent(agentPath string, agentType string) (string, error) {
 	switch agentType {
 	case AgentTypeClaudeCode:
 		names = []string{"claude"}
+	case AgentTypeGeminiCLI:
+		names = []string{"gemini"}
 	case AgentTypeCursorAgent:
 		fallthrough
 	default:
@@ -70,6 +73,8 @@ func LookupAgent(agentPath string, agentType string) (string, error) {
 	switch agentType {
 	case AgentTypeClaudeCode:
 		return "", fmt.Errorf("claude not found in PATH")
+	case AgentTypeGeminiCLI:
+		return "", fmt.Errorf("gemini not found in PATH")
 	default:
 		return "", fmt.Errorf("cursor-agent or agent not found in PATH")
 	}

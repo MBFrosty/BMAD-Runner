@@ -1,6 +1,6 @@
 # BMAD Runner
 
-Orchestrate BMAD workflow phases (create-story → dev-story → code-review) using `cursor-agent` or `claude-code`.
+Orchestrate BMAD workflow phases (create-story → dev-story → code-review) using `cursor-agent`, `claude-code`, or `gemini-cli`.
 
 ## Prerequisites
 
@@ -8,6 +8,7 @@ Orchestrate BMAD workflow phases (create-story → dev-story → code-review) us
 - **One agent backend** (in your PATH or via `--agent-path`):
   - `cursor-agent` CLI (usually in `~/.local/bin/agent`)
   - `claude` CLI ([Claude Code](https://code.claude.com))
+  - `gemini` CLI ([Gemini CLI](https://github.com/google-gemini/gemini-cli))
 
 ## Running
 
@@ -76,9 +77,9 @@ Runs the full pipeline (create-story → dev-story → code-review) for each pen
 You can customize the runner using global flags (works with any run method — `go run`, built binary, or from GitHub):
 - `--status-file`: Path to `sprint-status.yaml`
 - `--agent-path`: Path to agent binary (lookup in PATH by default)
-- `--agent-type`: Agent backend — `cursor-agent` (default) or `claude-code`
+- `--agent-type`: Agent backend — `cursor-agent` (default), `claude-code`, or `gemini-cli`
 - `--project-root`: Root of the project to run workflows in
-- `--model`: Model to use (default: `composer-1.5` for cursor-agent, `sonnet` for claude-code)
+- `--model`: Model to use (default: `composer-1.5` for cursor-agent, `sonnet` for claude-code, `gemini-3-pro-preview` for gemini-cli)
 - `--no-live-status`: Disable last-lines display in spinner (e.g. for CI/scripts). Live status is also disabled when stdout is not a TTY.
 
 Examples:
@@ -91,4 +92,10 @@ Examples:
 
 # Use claude-code with opus
 ./bin/bmad-runner --agent-type claude-code --model opus run dev-story
+
+# Use gemini-cli (default model: gemini-3-pro-preview)
+./bin/bmad-runner --agent-type gemini-cli run dev-story
+
+# Use gemini-cli with flash
+./bin/bmad-runner --agent-type gemini-cli --model gemini-2.5-flash run dev-story
 ```

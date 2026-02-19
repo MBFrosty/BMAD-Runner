@@ -90,6 +90,13 @@ func (r *Runner) Run(phase string) error {
 			"--dangerously-skip-permissions",
 			prompt,
 		)
+	case "gemini-cli":
+		cmd = exec.Command(r.AgentPath,
+			"--approval-mode", "yolo",
+			"--model", r.Model,
+			"-p",
+			prompt,
+		)
 	default:
 		cmd = exec.Command(r.AgentPath,
 			"-p",
