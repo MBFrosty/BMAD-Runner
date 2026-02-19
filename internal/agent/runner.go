@@ -72,6 +72,39 @@ func readPipe(r io.Reader, w io.Writer, buf *lastLinesBuffer) {
 	}
 }
 
+// scanTermLines is a bufio.SplitFunc that splits on \n, \r\n, or bare \r.
+// This handles PTY output where agents use \r for in-place line updates.
+func scanTermLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			return i + 1, data[:i], nil
+		}
+		if data[i] == '\r' {
+			if i+1 < len(data) && data[i+1] == '\n' {
+				return i + 2, data[:i], nil
+			}
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+// readPTY reads from a PTY master, splitting on \n, \r\n, or bare \r,
+// and pushes non-empty lines into buf.
+func readPTY(r io.Reader, buf *lastLinesBuffer) {
+	scanner := bufio.NewScanner(r)
+	scanner.Split(scanTermLines)
+	for scanner.Scan() {
+		buf.push(scanner.Text())
+	}
+}
+
 // --- claude-code stream-json parsing ---
 
 type claudeEvent struct {
@@ -194,6 +227,7 @@ func (r *Runner) Run(phase string) error {
 		cmd = exec.Command(r.AgentPath,
 			"-p",
 			"--output-format", "stream-json",
+			"--verbose",
 			"--model", r.Model,
 			"--dangerously-skip-permissions",
 			prompt,
@@ -280,7 +314,7 @@ func (r *Runner) Run(phase string) error {
 				return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
 			}
 			defer ptmx.Close()
-			go readPipe(ptmx, nil, buf)
+			go readPTY(ptmx, buf)
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
