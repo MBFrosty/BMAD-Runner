@@ -246,18 +246,17 @@ func runPhase(c *cli.Context, phase string) error {
 
 	model := c.String("model")
 	if model == "" {
-		model = defaultModelForAgentType(agentType)
+		model = defaultModelForAgentType(agentType, phase)
 	}
 
 	r := &agent.Runner{
 		AgentPath:    agentPath,
 		AgentType:    agentType,
 		ProjectRoot:  projectRoot,
-		Model:        model,
 		NoLiveStatus: c.Bool("no-live-status") || !term.IsTerminal(int(os.Stdout.Fd())),
 	}
 
-	return r.Run(phase)
+	return r.Run(phase, model)
 }
 
 func runAuto(c *cli.Context) error {
@@ -272,16 +271,10 @@ func runAuto(c *cli.Context) error {
 		return fmt.Errorf("looking up agent: %w", err)
 	}
 
-	model := c.String("model")
-	if model == "" {
-		model = defaultModelForAgentType(agentType)
-	}
-
 	r := &agent.Runner{
 		AgentPath:    agentPath,
 		AgentType:    agentType,
 		ProjectRoot:  projectRoot,
-		Model:        model,
 		NoLiveStatus: c.Bool("no-live-status") || !term.IsTerminal(int(os.Stdout.Fd())),
 	}
 
@@ -317,7 +310,13 @@ func runAuto(c *cli.Context) error {
 
 		if action == "retrospective" {
 			pterm.DefaultSection.Printf("Epic %s complete — running retrospective", epicKey)
-			if err := r.Run("retrospective"); err != nil {
+			
+			phaseModel := c.String("model")
+			if phaseModel == "" {
+				phaseModel = defaultModelForAgentType(agentType, "retrospective")
+			}
+			
+			if err := r.Run("retrospective", phaseModel); err != nil {
 				pterm.Error.Printf("Retrospective failed: %v\n", err)
 				return err
 			}
@@ -331,7 +330,13 @@ func runAuto(c *cli.Context) error {
 		// Run story pipeline
 		for i, phase := range phases {
 			ui.PrintPipeline(phases, i)
-			if err := r.Run(phase); err != nil {
+			
+			phaseModel := c.String("model")
+			if phaseModel == "" {
+				phaseModel = defaultModelForAgentType(agentType, phase)
+			}
+			
+			if err := r.Run(phase, phaseModel); err != nil {
 				pterm.Error.Printf("Phase %s failed: %v\n", phase, err)
 				return err
 			}
@@ -376,13 +381,40 @@ func resolveAgentType(s string) string {
 	}
 }
 
-func defaultModelForAgentType(agentType string) string {
+func defaultModelForAgentType(agentType string, phase string) string {
 	switch agentType {
 	case config.AgentTypeClaudeCode:
-		return "sonnet"
+		switch phase {
+		case "create-story":
+			return "opus" // bigger expensive model
+		case "dev-story":
+			return "haiku" // light fast model
+		case "code-review", "retrospective":
+			return "sonnet" // medium model
+		default:
+			return "sonnet"
+		}
 	case config.AgentTypeGeminiCLI:
-		return "gemini-3-pro-preview"
-	default:
-		return "composer-1.5"
+		switch phase {
+		case "create-story":
+			return "gemini-3-pro"
+		case "dev-story":
+			return "gemini-3-flash"
+		case "code-review", "retrospective":
+			return "gemini-3-pro"
+		default:
+			return "gemini-3-pro"
+		}
+	default: // CursorAgent
+		switch phase {
+		case "create-story":
+			return "gemini-3.1-pro-preview"
+		case "dev-story":
+			return "composer-1.5"
+		case "code-review", "retrospective":
+			return "gemini-3-flash-preview"
+		default:
+			return "composer-1.5"
+		}
 	}
 }

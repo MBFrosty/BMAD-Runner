@@ -28,7 +28,6 @@ type Runner struct {
 	AgentPath    string
 	AgentType    string
 	ProjectRoot  string
-	Model        string
 	NoLiveStatus bool // disable last-lines display in spinner (e.g. CI, --no-live-status)
 }
 
@@ -210,7 +209,7 @@ func lastNonEmptyLine(s string) string {
 // --- main Run logic ---
 
 // Run executes a BMAD workflow phase (create-story, dev-story, code-review)
-func (r *Runner) Run(phase string) error {
+func (r *Runner) Run(phase string, model string) error {
 	// 1. Read command file
 	commandFile := filepath.Join(r.ProjectRoot, ".cursor", "commands", fmt.Sprintf("bmad-bmm-%s.md", phase))
 	data, err := os.ReadFile(commandFile)
@@ -228,14 +227,14 @@ func (r *Runner) Run(phase string) error {
 			"-p",
 			"--output-format", "stream-json",
 			"--verbose",
-			"--model", r.Model,
+			"--model", model,
 			"--dangerously-skip-permissions",
 			prompt,
 		)
 	case "gemini-cli":
 		cmd = exec.Command(r.AgentPath,
 			"--approval-mode", "yolo",
-			"--model", r.Model,
+			"--model", model,
 			"-p",
 			prompt,
 		)
@@ -245,7 +244,7 @@ func (r *Runner) Run(phase string) error {
 			"--output-format", "stream-json",
 			"-f",
 			"--approve-mcps",
-			"--model", r.Model,
+			"--model", model,
 			"--workspace", r.ProjectRoot,
 			prompt,
 		)
@@ -256,7 +255,7 @@ func (r *Runner) Run(phase string) error {
 	pterm.DefaultSection.Printf("BMAD Workflow: %s", strings.ReplaceAll(phase, "-", " "))
 	pterm.Info.Printf("Project Root: %s\n", r.ProjectRoot)
 	pterm.Info.Printf("Agent:        %s\n", r.AgentType)
-	pterm.Info.Printf("Model:        %s\n", r.Model)
+	pterm.Info.Printf("Model:        %s\n", model)
 
 	buf := &lastLinesBuffer{max: lastLinesMax}
 
