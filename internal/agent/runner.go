@@ -59,12 +59,14 @@ func (b *lastLinesBuffer) get() []string {
 	return out
 }
 
-// readPipe reads from r, tees each line to w, and pushes complete lines to buf.
+// readPipe reads from r, tees each line to w (if non-nil), and pushes complete lines to buf.
 func readPipe(r io.Reader, w io.Writer, buf *lastLinesBuffer) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Fprintln(w, line)
+		if w != nil {
+			fmt.Fprintln(w, line)
+		}
 		buf.push(line)
 	}
 }
@@ -127,8 +129,14 @@ func (r *Runner) Run(phase string) error {
 	spinner, _ := ui.NewPhaseSpinner().Start(fmt.Sprintf("Executing %s...", phase))
 
 	buf := &lastLinesBuffer{max: lastLinesMax}
-	go readPipe(stdoutPipe, os.Stdout, buf)
-	go readPipe(stderrPipe, os.Stderr, buf)
+	var stdoutW, stderrW io.Writer
+	if r.NoLiveStatus {
+		stdoutW = os.Stdout
+		stderrW = os.Stderr
+	}
+
+	go readPipe(stdoutPipe, stdoutW, buf)
+	go readPipe(stderrPipe, stderrW, buf)
 
 	if err := cmd.Start(); err != nil {
 		spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
@@ -141,6 +149,7 @@ func (r *Runner) Run(phase string) error {
 		go func() {
 			ticker := time.NewTicker(statusInterval)
 			defer ticker.Stop()
+			var lastText string
 			for {
 				select {
 				case <-ctx.Done():
@@ -150,7 +159,11 @@ func (r *Runner) Run(phase string) error {
 					if len(lines) > 0 {
 						last := lines[len(lines)-1]
 						text := ui.FormatLastLineForStatus(last)
-						spinner.UpdateText(fmt.Sprintf("Executing %s... | %s", phase, text))
+						newText := fmt.Sprintf("Executing %s... | %s", phase, text)
+						if newText != lastText {
+							spinner.UpdateText(newText)
+							lastText = newText
+						}
 					}
 				}
 			}
