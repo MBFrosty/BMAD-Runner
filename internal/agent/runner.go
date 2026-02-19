@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	lastLinesMax   = 3
-	statusInterval = 300 * time.Millisecond
+	lastLinesMax  = 3
+	frameInterval = 80 * time.Millisecond
 )
 
 // Runner orchestrates cursor-agent or claude-code invocations
@@ -126,8 +126,6 @@ func (r *Runner) Run(phase string) error {
 	pterm.Info.Printf("Agent:        %s\n", r.AgentType)
 	pterm.Info.Printf("Model:        %s\n", r.Model)
 
-	spinner, _ := ui.NewPhaseSpinner().Start(fmt.Sprintf("Executing %s...", phase))
-
 	buf := &lastLinesBuffer{max: lastLinesMax}
 	var stdoutW, stderrW io.Writer
 	if r.NoLiveStatus {
@@ -138,33 +136,35 @@ func (r *Runner) Run(phase string) error {
 	go readPipe(stdoutPipe, stdoutW, buf)
 	go readPipe(stderrPipe, stderrW, buf)
 
+	// Choose display: in-place PhaseDisplay (live) or plain spinner (NoLiveStatus/CI)
+	var display *ui.PhaseDisplay
+	var spinner *pterm.SpinnerPrinter
+	if r.NoLiveStatus {
+		spinner, _ = ui.NewPhaseSpinner().Start(fmt.Sprintf("Executing %s...", phase))
+	} else {
+		display = ui.NewPhaseDisplay(phase, lastLinesMax)
+	}
+
 	if err := cmd.Start(); err != nil {
-		spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
+		if display != nil {
+			display.Fail()
+		} else {
+			spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
+		}
 		return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
 	}
 
-	// Spinner update loop when live status is enabled
 	ctx, cancel := context.WithCancel(context.Background())
-	if !r.NoLiveStatus {
+	if display != nil {
 		go func() {
-			ticker := time.NewTicker(statusInterval)
+			ticker := time.NewTicker(frameInterval)
 			defer ticker.Stop()
-			var lastText string
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					lines := buf.get()
-					if len(lines) > 0 {
-						last := lines[len(lines)-1]
-						text := ui.FormatLastLineForStatus(last)
-						newText := fmt.Sprintf("Executing %s... | %s", phase, text)
-						if newText != lastText {
-							spinner.UpdateText(newText)
-							lastText = newText
-						}
-					}
+					display.Tick(buf.get())
 				}
 			}
 		}()
@@ -173,12 +173,23 @@ func (r *Runner) Run(phase string) error {
 	runErr := cmd.Wait()
 	cancel()
 
-	if runErr != nil {
-		spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
-		return fmt.Errorf("agent execution failed for phase %s: %w", phase, runErr)
+	if display != nil {
+		if runErr != nil {
+			display.Fail()
+		} else {
+			display.Success()
+		}
+	} else {
+		if runErr != nil {
+			spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
+		} else {
+			spinner.Success(fmt.Sprintf("Phase %s completed", phase))
+		}
 	}
 
-	spinner.Success(fmt.Sprintf("Phase %s completed", phase))
+	if runErr != nil {
+		return fmt.Errorf("agent execution failed for phase %s: %w", phase, runErr)
+	}
 	return nil
 }
 

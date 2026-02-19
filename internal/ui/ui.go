@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -73,6 +74,57 @@ func NewPhaseSpinner() *pterm.SpinnerPrinter {
 		WithSequence(frames...).
 		WithDelay(80 * time.Millisecond).
 		WithShowTimer(false)
+}
+
+// PhaseDisplay renders the bounce animation and a rolling log preview in-place
+// using a pterm Area (no terminal scrolling). Use Tick to advance the frame and
+// refresh log lines; call Success or Fail when the phase ends.
+type PhaseDisplay struct {
+	area         *pterm.AreaPrinter
+	frames       []string
+	phase        string
+	frameIdx     int
+	logLineCount int
+}
+
+// NewPhaseDisplay starts an in-place live area for the given phase.
+// logLines controls how many preview lines are shown below the animation.
+func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
+	area, _ := pterm.DefaultArea.Start()
+	return &PhaseDisplay{
+		area:         area,
+		frames:       generateBounceFrames(),
+		phase:        phase,
+		logLineCount: logLines,
+	}
+}
+
+// Tick advances the animation by one frame and redraws with the provided log lines.
+func (d *PhaseDisplay) Tick(logLines []string) {
+	frame := d.frames[d.frameIdx%len(d.frames)]
+	d.frameIdx++
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s  Executing %s...\n", frame, d.phase))
+	for i := 0; i < d.logLineCount; i++ {
+		if i < len(logLines) {
+			sb.WriteString(fmt.Sprintf("  │ %s\n", FormatLastLineForStatus(logLines[i])))
+		} else {
+			sb.WriteString("  │\n")
+		}
+	}
+	d.area.Update(sb.String())
+}
+
+// Success stops the area and prints a success message.
+func (d *PhaseDisplay) Success() {
+	d.area.Stop()
+	pterm.Success.Printf("Phase %s completed\n", d.phase)
+}
+
+// Fail stops the area and prints a failure message.
+func (d *PhaseDisplay) Fail() {
+	d.area.Stop()
+	pterm.Error.Printf("Phase %s failed\n", d.phase)
 }
 
 // PrintBanner prints the BMAD RUNNER ASCII banner and tagline.
