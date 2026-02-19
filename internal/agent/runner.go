@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -71,6 +72,110 @@ func readPipe(r io.Reader, w io.Writer, buf *lastLinesBuffer) {
 	}
 }
 
+// --- claude-code stream-json parsing ---
+
+type claudeEvent struct {
+	Type    string     `json:"type"`
+	Message *claudeMsg `json:"message,omitempty"`
+}
+
+type claudeMsg struct {
+	Content []claudeBlock `json:"content"`
+}
+
+type claudeBlock struct {
+	Type  string          `json:"type"` // "text" or "tool_use"
+	Text  string          `json:"text,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+}
+
+// readClaudeStream reads JSONL from claude's --output-format stream-json stdout,
+// extracts human-readable status lines, and pushes them to buf.
+func readClaudeStream(r io.Reader, buf *lastLinesBuffer) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	for scanner.Scan() {
+		raw := scanner.Bytes()
+		if len(raw) == 0 {
+			continue
+		}
+		var ev claudeEvent
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			continue
+		}
+		for _, line := range extractClaudeStatus(&ev) {
+			buf.push(line)
+		}
+	}
+}
+
+func extractClaudeStatus(ev *claudeEvent) []string {
+	if ev.Type != "assistant" || ev.Message == nil {
+		return nil
+	}
+	var lines []string
+	for _, block := range ev.Message.Content {
+		switch block.Type {
+		case "tool_use":
+			lines = append(lines, formatToolUse(block))
+		case "text":
+			if last := lastNonEmptyLine(block.Text); last != "" {
+				lines = append(lines, last)
+			}
+		}
+	}
+	return lines
+}
+
+func formatToolUse(block claudeBlock) string {
+	var pathInput struct {
+		Path string `json:"file_path"`
+	}
+	var cmdInput struct {
+		Command string `json:"command"`
+	}
+	switch block.Name {
+	case "Read", "read_file":
+		if json.Unmarshal(block.Input, &pathInput) == nil && pathInput.Path != "" {
+			return "Reading " + pathInput.Path
+		}
+	case "Edit", "edit_file":
+		if json.Unmarshal(block.Input, &pathInput) == nil && pathInput.Path != "" {
+			return "Editing " + pathInput.Path
+		}
+	case "Write", "write_file":
+		if json.Unmarshal(block.Input, &pathInput) == nil && pathInput.Path != "" {
+			return "Writing " + pathInput.Path
+		}
+	case "Bash", "execute_command":
+		if json.Unmarshal(block.Input, &cmdInput) == nil && cmdInput.Command != "" {
+			c := cmdInput.Command
+			if len(c) > 50 {
+				c = c[:47] + "..."
+			}
+			return "Running: " + c
+		}
+	case "Glob", "glob":
+		return "Tool: Glob"
+	case "Grep", "grep":
+		return "Tool: Grep"
+	}
+	return "Tool: " + block.Name
+}
+
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// --- main Run logic ---
+
 // Run executes a BMAD workflow phase (create-story, dev-story, code-review)
 func (r *Runner) Run(phase string) error {
 	// 1. Read command file
@@ -88,6 +193,7 @@ func (r *Runner) Run(phase string) error {
 	case "claude-code":
 		cmd = exec.Command(r.AgentPath,
 			"-p",
+			"--output-format", "stream-json",
 			"--model", r.Model,
 			"--dangerously-skip-permissions",
 			prompt,
@@ -146,18 +252,36 @@ func (r *Runner) Run(phase string) error {
 			spinner.Success(fmt.Sprintf("Phase %s completed", phase))
 		}
 	} else {
-		// Live mode: start the agent under a PTY so it thinks it's in a terminal
-		// and streams output in real time. Read PTY output into the rolling buffer.
 		display := ui.NewPhaseDisplay(phase, lastLinesMax)
 
-		ptmx, err := pty.Start(cmd)
-		if err != nil {
-			display.Fail()
-			return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
+		if r.AgentType == "claude-code" {
+			// claude-code streams JSONL events to stdout; parse them into status lines.
+			stdoutPipe, err := cmd.StdoutPipe()
+			if err != nil {
+				display.Fail()
+				return fmt.Errorf("stdout pipe: %w", err)
+			}
+			stderrPipe, err := cmd.StderrPipe()
+			if err != nil {
+				display.Fail()
+				return fmt.Errorf("stderr pipe: %w", err)
+			}
+			if err := cmd.Start(); err != nil {
+				display.Fail()
+				return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
+			}
+			go readClaudeStream(stdoutPipe, buf)
+			go readPipe(stderrPipe, nil, buf)
+		} else {
+			// gemini-cli / cursor-agent: use PTY so the agent streams output in real time.
+			ptmx, err := pty.Start(cmd)
+			if err != nil {
+				display.Fail()
+				return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
+			}
+			defer ptmx.Close()
+			go readPipe(ptmx, nil, buf)
 		}
-		defer ptmx.Close()
-
-		go readPipe(ptmx, nil, buf)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
