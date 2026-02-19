@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/MBFrosty/BMAD-Runner/internal/ui"
-
+	"github.com/creack/pty"
 	"github.com/pterm/pterm"
 )
 
@@ -112,50 +112,54 @@ func (r *Runner) Run(phase string) error {
 
 	cmd.Dir = r.ProjectRoot
 
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("stderr pipe: %w", err)
-	}
-
 	pterm.DefaultSection.Printf("BMAD Workflow: %s", strings.ReplaceAll(phase, "-", " "))
 	pterm.Info.Printf("Project Root: %s\n", r.ProjectRoot)
 	pterm.Info.Printf("Agent:        %s\n", r.AgentType)
 	pterm.Info.Printf("Model:        %s\n", r.Model)
 
 	buf := &lastLinesBuffer{max: lastLinesMax}
-	var stdoutW, stderrW io.Writer
+
+	var runErr error
+
 	if r.NoLiveStatus {
-		stdoutW = os.Stdout
-		stderrW = os.Stderr
-	}
-
-	go readPipe(stdoutPipe, stdoutW, buf)
-	go readPipe(stderrPipe, stderrW, buf)
-
-	// Choose display: in-place PhaseDisplay (live) or plain spinner (NoLiveStatus/CI)
-	var display *ui.PhaseDisplay
-	var spinner *pterm.SpinnerPrinter
-	if r.NoLiveStatus {
-		spinner, _ = ui.NewPhaseSpinner().Start(fmt.Sprintf("Executing %s...", phase))
-	} else {
-		display = ui.NewPhaseDisplay(phase, lastLinesMax)
-	}
-
-	if err := cmd.Start(); err != nil {
-		if display != nil {
-			display.Fail()
-		} else {
-			spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
+		// CI/script mode: pipe output directly to terminal, plain spinner for progress.
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("stdout pipe: %w", err)
 		}
-		return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
-	}
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			return fmt.Errorf("stderr pipe: %w", err)
+		}
+		go readPipe(stdoutPipe, os.Stdout, buf)
+		go readPipe(stderrPipe, os.Stderr, buf)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	if display != nil {
+		spinner, _ := ui.NewPhaseSpinner().Start(fmt.Sprintf("Executing %s...", phase))
+		if err := cmd.Start(); err != nil {
+			spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
+			return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
+		}
+		runErr = cmd.Wait()
+		if runErr != nil {
+			spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
+		} else {
+			spinner.Success(fmt.Sprintf("Phase %s completed", phase))
+		}
+	} else {
+		// Live mode: start the agent under a PTY so it thinks it's in a terminal
+		// and streams output in real time. Read PTY output into the rolling buffer.
+		display := ui.NewPhaseDisplay(phase, lastLinesMax)
+
+		ptmx, err := pty.Start(cmd)
+		if err != nil {
+			display.Fail()
+			return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
+		}
+		defer ptmx.Close()
+
+		go readPipe(ptmx, nil, buf)
+
+		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			ticker := time.NewTicker(frameInterval)
 			defer ticker.Stop()
@@ -168,22 +172,14 @@ func (r *Runner) Run(phase string) error {
 				}
 			}
 		}()
-	}
 
-	runErr := cmd.Wait()
-	cancel()
+		runErr = cmd.Wait()
+		cancel()
 
-	if display != nil {
 		if runErr != nil {
 			display.Fail()
 		} else {
 			display.Success()
-		}
-	} else {
-		if runErr != nil {
-			spinner.Fail(fmt.Sprintf("Phase %s failed", phase))
-		} else {
-			spinner.Success(fmt.Sprintf("Phase %s completed", phase))
 		}
 	}
 
