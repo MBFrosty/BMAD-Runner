@@ -123,9 +123,9 @@ type claudeBlock struct {
 	Input json.RawMessage `json:"input,omitempty"`
 }
 
-// readClaudeStream reads JSONL from claude's --output-format stream-json stdout,
+// readStreamJSON reads JSONL from an agent's --output-format stream-json stdout,
 // extracts human-readable status lines, and pushes them to buf.
-func readClaudeStream(r io.Reader, buf *lastLinesBuffer) {
+func readStreamJSON(r io.Reader, buf *lastLinesBuffer) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 	for scanner.Scan() {
@@ -242,6 +242,7 @@ func (r *Runner) Run(phase string) error {
 	default:
 		cmd = exec.Command(r.AgentPath,
 			"-p",
+			"--output-format", "stream-json",
 			"-f",
 			"--approve-mcps",
 			"--model", r.Model,
@@ -288,8 +289,17 @@ func (r *Runner) Run(phase string) error {
 	} else {
 		display := ui.NewPhaseDisplay(phase, lastLinesMax)
 
-		if r.AgentType == "claude-code" {
-			// claude-code streams JSONL events to stdout; parse them into status lines.
+		if r.AgentType == "gemini-cli" {
+			// gemini-cli: use PTY so the agent streams output in real time.
+			ptmx, err := pty.Start(cmd)
+			if err != nil {
+				display.Fail()
+				return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
+			}
+			defer ptmx.Close()
+			go readPTY(ptmx, buf)
+		} else {
+			// claude-code / cursor-agent: stream JSONL events via --output-format stream-json.
 			stdoutPipe, err := cmd.StdoutPipe()
 			if err != nil {
 				display.Fail()
@@ -304,17 +314,8 @@ func (r *Runner) Run(phase string) error {
 				display.Fail()
 				return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
 			}
-			go readClaudeStream(stdoutPipe, buf)
+			go readStreamJSON(stdoutPipe, buf)
 			go readPipe(stderrPipe, nil, buf)
-		} else {
-			// gemini-cli / cursor-agent: use PTY so the agent streams output in real time.
-			ptmx, err := pty.Start(cmd)
-			if err != nil {
-				display.Fail()
-				return fmt.Errorf("agent start failed for phase %s: %w", phase, err)
-			}
-			defer ptmx.Close()
-			go readPTY(ptmx, buf)
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
