@@ -3,6 +3,8 @@ module github.com/MBFrosty/BMAD-Runner
 go 1.24.13
 
 require (
+	atomicgo.dev/cursor v0.2.0
+	github.com/creack/pty v1.1.24
 	github.com/pterm/pterm v0.12.82
 	github.com/urfave/cli/v2 v2.27.7
 	golang.org/x/term v0.32.0
@@ -10,12 +12,10 @@ require (
 )
 
 require (
-	atomicgo.dev/cursor v0.2.0 // indirect
 	atomicgo.dev/keyboard v0.2.9 // indirect
 	atomicgo.dev/schedule v0.1.0 // indirect
 	github.com/containerd/console v1.0.5 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/gookit/color v1.5.4 // indirect
 	github.com/lithammer/fuzzysearch v1.1.8 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect

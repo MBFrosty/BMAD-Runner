@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
+	"atomicgo.dev/cursor"
 	"github.com/pterm/pterm"
 )
 
@@ -79,31 +81,38 @@ func NewPhaseSpinner() *pterm.SpinnerPrinter {
 }
 
 // PhaseDisplay renders the bounce animation and a rolling log preview in-place
-// using a pterm Area (no terminal scrolling). Use Tick to advance the frame and
-// refresh log lines; call Success or Fail when the phase ends.
+// using atomicgo/cursor Area (no terminal scrolling). Use Tick to advance the frame
+// and refresh log lines; call Success or Fail when the phase ends.
 type PhaseDisplay struct {
-	area         *pterm.AreaPrinter
+	area         cursor.Area
 	frames       []string
 	phase        string
 	frameIdx     int
 	logLineCount int
+	mu           sync.Mutex
+	active       bool
 }
 
 // NewPhaseDisplay starts an in-place live area for the given phase.
 // logLines controls how many preview lines are shown below the animation.
-// Uses WithFullscreen(false) to keep the area contained without clearing the screen.
 func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
-	area, _ := pterm.DefaultArea.WithFullscreen(false).Start()
 	return &PhaseDisplay{
-		area:         area,
+		area:         cursor.NewArea(),
 		frames:       generateBounceFrames(),
 		phase:        phase,
 		logLineCount: logLines,
+		active:       true,
 	}
 }
 
 // Tick advances the animation by one frame and redraws with the provided log lines.
+// Serialized to prevent overlapping updates.
 func (d *PhaseDisplay) Tick(logLines []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.active {
+		return
+	}
 	frame := d.frames[d.frameIdx%len(d.frames)]
 	d.frameIdx++
 	var sb strings.Builder
@@ -120,13 +129,19 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 
 // Success stops the area and prints a success message.
 func (d *PhaseDisplay) Success() {
-	d.area.Stop()
+	d.mu.Lock()
+	d.active = false
+	d.area.Clear()
+	d.mu.Unlock()
 	pterm.Success.Printf("Phase %s completed\n", d.phase)
 }
 
 // Fail stops the area and prints a failure message.
 func (d *PhaseDisplay) Fail() {
-	d.area.Stop()
+	d.mu.Lock()
+	d.active = false
+	d.area.Clear()
+	d.mu.Unlock()
 	pterm.Error.Printf("Phase %s failed\n", d.phase)
 }
 
