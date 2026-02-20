@@ -408,7 +408,7 @@ func defaultModelForAgentType(agentType string, phase string) string {
 	default: // CursorAgent
 		switch phase {
 		case "create-story":
-			return "gemini-3.1-pro"
+			return "claude-4.6-sonnet-medium"
 		case "dev-story":
 			return "composer-1.5"
 		case "code-review", "retrospective":

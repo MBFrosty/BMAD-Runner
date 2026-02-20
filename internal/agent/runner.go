@@ -286,6 +286,8 @@ func (r *Runner) Run(phase string, model string) error {
 			spinner.Success(fmt.Sprintf("Phase %s completed", phase))
 		}
 	} else {
+		// Live mode: consume all agent output (no forwarding to terminal).
+		// Only the PhaseDisplay shows a rolling 3-line preview in place.
 		display := ui.NewPhaseDisplay(phase, lastLinesMax)
 
 		if r.AgentType == "gemini-cli" {

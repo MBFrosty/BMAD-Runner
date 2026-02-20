@@ -16,6 +16,8 @@ var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 // Strips ANSI codes and control chars, truncates to statusTruncate chars.
 func FormatLastLineForStatus(line string) string {
 	line = ansiEscape.ReplaceAllString(line, "")
+	line = strings.ReplaceAll(line, "\r", " ")
+	line = strings.ReplaceAll(line, "\n", " ")
 	line = strings.Map(func(r rune) rune {
 		if r < 32 && r != '\t' {
 			return -1
@@ -89,8 +91,9 @@ type PhaseDisplay struct {
 
 // NewPhaseDisplay starts an in-place live area for the given phase.
 // logLines controls how many preview lines are shown below the animation.
+// Uses WithFullscreen(false) to keep the area contained without clearing the screen.
 func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
-	area, _ := pterm.DefaultArea.Start()
+	area, _ := pterm.DefaultArea.WithFullscreen(false).Start()
 	return &PhaseDisplay{
 		area:         area,
 		frames:       generateBounceFrames(),
