@@ -356,7 +356,7 @@ func runAuto(c *cli.Context) error {
 				return nil
 			}
 
-			// Plan ONE new epic via two targeted BMAD invocations, then continue.
+			// Plan ONE new epic via a targeted BMAD invocation, then continue.
 			nextEpicNum := s.NextEpicNumber()
 			planErr := runOneEpicPlanning(c, r, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
 			switch planErr {
