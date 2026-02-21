@@ -158,12 +158,13 @@ Use the `--model` (or `-m`) flag to override the model used by the agent. If you
 
 **Default Models by Agent and Phase:**
 
-| Agent | `create-story` | `dev-story` | `code-review` / `retrospective` | `plan-epics` | Fallback / Default |
-|-------|----------------|-------------|---------------------------------|--------------|---------------------|
+| Agent | `create-story` | `dev-story` | `code-review` / `retrospective` | `correct-course` (`plan-epics`) | Fallback / Default |
+|-------|----------------|-------------|---------------------------------|-------------------------------|---------------------|
 | **`cursor-agent`** | `claude-4.6-sonnet-medium` | `composer-1.5` | `gemini-3-flash` | `claude-4.6-sonnet-medium` | `composer-1.5` |
 | **`claude-code`**| `opus` | `haiku` | `sonnet` | `opus` | `sonnet` |
 | **`gemini-cli`** | `gemini-3-pro` | `gemini-3-flash`| `gemini-3-pro` | `gemini-3-pro` | `gemini-3-pro` |
 
+Note: The `plan-epics` command runs the internal `correct-course` phase; the models in that column are used when you run `plan-epics`.
 ### Examples
 
 ```bash
