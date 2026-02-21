@@ -155,9 +155,17 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	perimeter := topLen + 1 + rightLen + 1 + bottomLen + 1 + leftLen + 1
 	offset := (d.frameIdx / 2) % perimeter
 
-	charAt := func(p int) rune {
-		idx := (p - offset + 12*perimeter) % perimeter
-		return rune(rotateText[idx%12])
+	// Only 12 consecutive positions show "agent output"; rest show dash.
+	// relPos is the position relative to the sliding window start.
+	charAt := func(p int) (r rune, ok bool) {
+		relPos := (p - offset + perimeter) % perimeter
+		if relPos < 0 {
+			relPos += perimeter
+		}
+		if relPos < 12 {
+			return rune(rotateText[relPos]), true
+		}
+		return 0, false
 	}
 
 	var sb strings.Builder
@@ -173,41 +181,34 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 
 	// Segment boundaries (clockwise: top → top-right corner → right → bottom-right → bottom → bottom-left → left → top-left)
 	topRightCorner := topLen
-	rightStart := topLen + 1
-	rightEnd := topLen + rightLen
-	bottomRightCorner := rightEnd + 1
+	bottomRightCorner := topLen + 1 + rightLen + 1
 	bottomStart := bottomRightCorner + 1
 	bottomEnd := bottomStart + bottomLen - 1
 	bottomLeftCorner := bottomEnd + 1
-	leftStart := bottomLeftCorner + 1
-	leftEnd := leftStart + leftLen - 1
-	topLeftCorner := leftEnd + 1
+	topLeftCorner := bottomLeftCorner + 1 + leftLen + 1
 
 	// Top line: ┏ + top-left corner + top segment + top-right corner + ┓
 	topLine := "┏"
-	cTopLeft := charAt(topLeftCorner)
-	if cTopLeft == ' ' {
-		topLine += "━"
+	if c, ok := charAt(topLeftCorner); ok && c != ' ' {
+		topLine += string(c)
 	} else {
-		topLine += string(cTopLeft)
+		topLine += "━"
 	}
 	for i := 0; i < topLen; i++ {
-		c := charAt(i)
-		if c == ' ' {
-			topLine += "━"
-		} else {
+		if c, ok := charAt(i); ok && c != ' ' {
 			topLine += string(c)
+		} else {
+			topLine += "━"
 		}
 	}
-	cTopRight := charAt(topRightCorner)
-	if cTopRight == ' ' {
-		topLine += "━┓"
+	if c, ok := charAt(topRightCorner); ok && c != ' ' {
+		topLine += string(c) + "┓"
 	} else {
-		topLine += string(cTopRight) + "┓"
+		topLine += "━┓"
 	}
 	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleRow(0), topLine))
 
-	// Content lines with right edge chars
+	// Content lines: keep log readable — no rotating chars in content area
 	for i := 0; i < d.logLineCount; i++ {
 		var content string
 		if i < len(logLines) {
@@ -217,46 +218,29 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 		if pad < 0 {
 			pad = 0
 		}
-
-		pRight := rightStart + i
-		pLeft := leftEnd - i
-		rightCh := charAt(pRight)
-		leftCh := charAt(pLeft)
-		leftStr := " "
-		if leftCh != ' ' {
-			leftStr = string(leftCh)
-		}
-		rightStr := " "
-		if rightCh != ' ' {
-			rightStr = string(rightCh)
-		}
-		inner := leftStr + content + strings.Repeat(" ", pad) + rightStr
-
+		inner := " " + content + strings.Repeat(" ", pad) + " "
 		sb.WriteString(fmt.Sprintf("  %s   ┃%s┃\n", brailleRow(i+1), inner))
 	}
 
 	// Bottom line: ┗ + bottomLeftCorner + bottom segment (L→R) + bottomRightCorner + ┛
 	bottomLine := "┗"
-	c := charAt(bottomLeftCorner)
-	if c == ' ' {
-		bottomLine += "━"
-	} else {
+	if c, ok := charAt(bottomLeftCorner); ok && c != ' ' {
 		bottomLine += string(c)
+	} else {
+		bottomLine += "━"
 	}
 	for i := bottomLen - 1; i >= 0; i-- {
 		p := bottomStart + i
-		c := charAt(p)
-		if c == ' ' {
-			bottomLine += "━"
-		} else {
+		if c, ok := charAt(p); ok && c != ' ' {
 			bottomLine += string(c)
+		} else {
+			bottomLine += "━"
 		}
 	}
-	c = charAt(bottomRightCorner)
-	if c == ' ' {
-		bottomLine += "━┛"
-	} else {
+	if c, ok := charAt(bottomRightCorner); ok && c != ' ' {
 		bottomLine += string(c) + "┛"
+	} else {
+		bottomLine += "━┛"
 	}
 	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleRow(d.logLineCount+1), bottomLine))
 	d.area.Update(sb.String())
