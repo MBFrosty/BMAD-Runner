@@ -78,7 +78,7 @@ func rainDropChar(slowFrame, lineIdx, totalLines, phase int) rune {
 // brailleStripLine returns one line of the Matrix rain strip (4 columns).
 // All streams operate the same: bright head + fading trail, staggered phases.
 func brailleStripLine(frameIdx, lineIdx, totalLines int) string {
-	slowFrame := frameIdx / 2
+	slowFrame := frameIdx / 4
 	var buf [4]rune
 	// 2 streams per column, 8 total — phases staggered for dense rain
 	phases := []int{0, totalLines/8, totalLines/4, 3*totalLines/8, totalLines/2, 5*totalLines/8, 3*totalLines/4, 7*totalLines/8}
