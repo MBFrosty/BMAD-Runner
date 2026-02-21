@@ -208,10 +208,11 @@ func lastNonEmptyLine(s string) string {
 
 // --- main Run logic ---
 
-// Run executes a BMAD workflow phase (create-story, dev-story, code-review)
+// Run executes a BMAD workflow phase (create-story, dev-story, code-review) by reading
+// the phase's command file and running the agent with a yolo preamble.
 func (r *Runner) Run(phase string, model string) error {
-	// 1. Read command file
-	commandFile := filepath.Join(r.ProjectRoot, ".cursor", "commands", fmt.Sprintf("bmad-bmm-%s.md", phase))
+	// 1. Read command file — check agent-specific directory first, then fall back to .cursor
+	commandFile := r.resolveCommandFile(phase)
 	data, err := os.ReadFile(commandFile)
 	if err != nil {
 		return fmt.Errorf("reading command file %s: %w", commandFile, err)
@@ -220,6 +221,40 @@ func (r *Runner) Run(phase string, model string) error {
 	// 2. Build prompt with yolo preamble
 	prompt := buildYoloPrompt(string(data))
 
+	return r.runPrompt(prompt, phase, model)
+}
+
+// resolveCommandFile returns the path of the command file for a given phase.
+// It checks the agent-appropriate directory first (.claude/commands for claude-code,
+// .cursor/commands for cursor-agent / gemini-cli), then falls back to .cursor/commands.
+func (r *Runner) resolveCommandFile(phase string) string {
+	filename := fmt.Sprintf("bmad-bmm-%s.md", phase)
+
+	var preferred string
+	switch r.AgentType {
+	case "claude-code":
+		preferred = filepath.Join(r.ProjectRoot, ".claude", "commands", filename)
+	default:
+		preferred = filepath.Join(r.ProjectRoot, ".cursor", "commands", filename)
+	}
+
+	if _, err := os.Stat(preferred); err == nil {
+		return preferred
+	}
+
+	// Fallback: .cursor/commands (original behavior)
+	return filepath.Join(r.ProjectRoot, ".cursor", "commands", filename)
+}
+
+// RunWithPrompt executes an agent phase using a pre-built prompt string instead of
+// reading from a command file. Use this for dynamically generated phases such as
+// plan-epics where the prompt is constructed programmatically.
+func (r *Runner) RunWithPrompt(prompt, phase, model string) error {
+	return r.runPrompt(prompt, phase, model)
+}
+
+// runPrompt is the shared implementation that executes an agent with a given prompt.
+func (r *Runner) runPrompt(prompt, phase, model string) error {
 	var cmd *exec.Cmd
 	switch r.AgentType {
 	case "claude-code":

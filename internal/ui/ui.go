@@ -182,6 +182,16 @@ func PrintEpicProgress(epicKey string, storiesDone, storiesTotal int) {
 	pterm.Println()
 }
 
+// PrintEpicPlanningBanner prints a banner before the automated epic planning phase.
+func PrintEpicPlanningBanner(primeDirectivePath string, maxEpics int) {
+	pterm.DefaultSection.Println("Automated Epic Planning")
+	pterm.Info.Printf("Prime directive: %s\n", primeDirectivePath)
+	pterm.Info.Printf("Max new epics:   %d\n", maxEpics)
+	pterm.Println()
+	pterm.Println(pterm.Cyan("  ◈  Planning new epics based on prime directive..."))
+	pterm.Println()
+}
+
 // WorkPlan holds the next work item from sprint-status for display.
 type WorkPlan struct {
 	Action    string // "story", "retrospective", or ""
