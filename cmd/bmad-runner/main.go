@@ -387,7 +387,7 @@ func runAuto(c *cli.Context) error {
 
 			// Plan ONE new epic via a targeted BMAD invocation, then continue.
 			nextEpicNum := s.NextEpicNumber()
-			planErr := runOneEpicPlanning(c, r, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
+			planErr := runOneEpicPlanning(c, r, projectRoot, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
 			switch planErr {
 			case nil:
 				// Sprint-status was updated — loop will pick up the new stories.
@@ -497,7 +497,7 @@ func runAuto(c *cli.Context) error {
 func runOneEpicPlanning(
 	c *cli.Context,
 	r *agent.Runner,
-	statusPath, primeDirectivePath, agentType string,
+	projectRoot, statusPath, primeDirectivePath, agentType string,
 	nextEpicNum int,
 	statusBefore []byte,
 ) error {
@@ -528,7 +528,6 @@ func runOneEpicPlanning(
 	ui.PrintEpicPlanningBanner(primeDirectivePath, nextEpicNum, maxNewEpics)
 
 	// Discover project files to ground the planning context in actual project state.
-	projectRoot, _, _ := config.ResolveProjectRoot(c.String("status-file"), c.String("project-root"))
 	epicsFile := planner.FindEpicsFile(projectRoot)
 	retroFiles := planner.FindRetroFiles(projectRoot, 2) // include at most last 2 retros
 
@@ -657,7 +656,7 @@ func runPlanEpicsCommand(c *cli.Context) error {
 	}
 
 	nextEpicNum := s.NextEpicNumber()
-	planErr := runOneEpicPlanning(c, r, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
+	planErr := runOneEpicPlanning(c, r, projectRoot, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
 	switch planErr {
 	case nil:
 		pterm.Success.Printf("Epic %d planning complete.\n", nextEpicNum)
