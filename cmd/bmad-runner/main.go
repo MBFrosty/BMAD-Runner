@@ -542,6 +542,14 @@ func runOneEpicPlanning(
 	}
 
 	// --- Phase B: sprint-planning to update sprint-status.yaml ---
+	// IMPORTANT: epics.md is the source of truth in this flow.
+	// Phase A writes new epics to epics.md; Phase B rebuilds sprint-status.yaml from it.
+	//
+	// This is intentionally different from correct-course, which writes directly to
+	// sprint-status.yaml (checklist 6.4) and bypasses epics.md. If a user has run
+	// correct-course manually outside this flow, those sprint-status entries will be
+	// overwritten here unless the corresponding epics are also present in epics.md.
+	// The fix is to ensure any manually-created epics are in epics.md before running auto.
 	sprintModel := c.String("model")
 	if sprintModel == "" {
 		sprintModel = defaultModelForAgentType(agentType, "sprint-planning")
