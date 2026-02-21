@@ -141,7 +141,7 @@ func FindRetroFiles(projectRoot string, maxFiles int) []string {
 	return matches
 }
 
-// EpicPlanningContext holds all inputs for BuildEpicPlanningPrompt.
+// EpicPlanningContext holds all inputs for BuildCorrectCourseContext.
 type EpicPlanningContext struct {
 	// PrimeDirective is the content of the prime directive file (may be empty).
 	PrimeDirective string
@@ -150,125 +150,116 @@ type EpicPlanningContext struct {
 	NextEpicNum int
 
 	// EpicsFilePath is the path to the existing epics document.
-	// When set, the agent is directed to read it first so it doesn't duplicate existing epics.
 	EpicsFilePath string
 
 	// RetroFilePaths are paths to recent retrospective files (newest first).
-	// When set, the agent is directed to read them for lessons learned and tech debt items.
 	RetroFilePaths []string
 
 	// CompletedEpics is the list of epic keys that are fully done (e.g. ["epic-1", "epic-2"]).
-	// Injected into the context so the agent knows what's already been built.
 	CompletedEpics []string
 
 	// StatusFilePath is the path to sprint-status.yaml.
-	// Shown to the agent so it can verify the current project state.
 	StatusFilePath string
 }
 
-// BuildEpicPlanningPrompt returns a self-contained task prompt for a targeted RunWithPrompt
-// agent activation. The prompt tells the agent to:
-//  1. Read the prime directive, existing epics document, recent retrospective(s), and sprint-status
-//  2. Synthesize the project's current state and the prime directive's direction
-//  3. Append exactly ONE new epic (nextEpicNum) in BMAD format to the existing epics document
+// BuildCorrectCourseContext returns a context preamble to prepend to the BMAD
+// correct-course command file for automated incremental epic planning.
 //
-// This is NOT a preamble for the BMAD create-epics-and-stories workflow.
-// That workflow re-generates ALL epics from the PRD and is designed for initial project planning.
-// For incremental epic planning on an existing project, a targeted RunWithPrompt is more reliable.
+// correct-course is the proper BMAD "anytime" workflow for adding new epics to an
+// existing in-progress project (per the BMAD help catalog). It reads all project
+// documents (PRD, epics, architecture) and updates sprint-status.yaml with the
+// new epic/story entries via checklist item 6.4.
 //
-// The sprint-planning BMAD command is still used afterward (Phase B) to update sprint-status.yaml.
-func BuildEpicPlanningPrompt(ctx EpicPlanningContext) string {
+// The preamble provides the "change trigger" and prime directive that the workflow
+// needs to proceed autonomously in yolo mode without halting for human input.
+// It also instructs the agent to update both sprint-status.yaml AND the epics
+// document so both sources stay in sync.
+//
+// Note: we do NOT run sprint-planning after correct-course. correct-course writes
+// to sprint-status.yaml directly; running sprint-planning afterward would overwrite
+// those entries by re-deriving from epics.md.
+func BuildCorrectCourseContext(ctx EpicPlanningContext) string {
 	var sb strings.Builder
 
-	sb.WriteString("# Task: Add Epic ")
-	sb.WriteString(fmt.Sprintf("%d", ctx.NextEpicNum))
-	sb.WriteString(" to Existing Project\n\n")
+	sb.WriteString("# Automated Epic Planning — Correct Course Session\n\n")
 
-	sb.WriteString("You are a BMAD Product Manager. Your task is to append ONE new epic to an existing\n")
-	sb.WriteString("in-progress project. Do NOT create a new project. Do NOT regenerate existing epics.\n\n")
+	// --- Change trigger ---
+	// correct-course Step 1 asks for the change trigger. We provide it here so
+	// the workflow doesn't halt waiting for user input.
+	sb.WriteString("## Change Trigger (Required by Correct Course Step 1)\n\n")
+	if ctx.NextEpicNum > 1 && len(ctx.CompletedEpics) > 0 {
+		sb.WriteString(fmt.Sprintf(
+			"All planned work is complete (%s are done). ",
+			strings.Join(ctx.CompletedEpics, ", "),
+		))
+	} else {
+		sb.WriteString("All currently planned work is complete. ")
+	}
+	sb.WriteString(fmt.Sprintf(
+		"We need to plan and add **Epic %d** — the next phase of development.\n\n",
+		ctx.NextEpicNum,
+	))
+	sb.WriteString("This is proactive forward planning, not a bug fix or mid-sprint pivot.\n\n")
 
-	// --- Step 1: Read context files ---
-	sb.WriteString("## Step 1: Read These Files First (MANDATORY)\n\n")
-	sb.WriteString("Before writing anything, read ALL of the following files to understand the project:\n\n")
-
-	step := 1
-	if ctx.EpicsFilePath != "" {
-		sb.WriteString(fmt.Sprintf("**%d. Existing Epics Document** (read in full — know what's already planned):\n", step))
-		sb.WriteString(fmt.Sprintf("   `%s`\n", ctx.EpicsFilePath))
-		if len(ctx.CompletedEpics) > 0 {
-			sb.WriteString(fmt.Sprintf("   Already completed: %s\n", strings.Join(ctx.CompletedEpics, ", ")))
+	// --- Pre-flight: extra files to read ---
+	// correct-course Step 0.5 loads standard docs (PRD, architecture, UX).
+	// We direct it to also read these files the workflow wouldn't otherwise prioritize.
+	hasExtra := ctx.EpicsFilePath != "" || len(ctx.RetroFilePaths) > 0
+	if hasExtra {
+		sb.WriteString("## Additional Context Files (Read in Step 0.5)\n\n")
+		sb.WriteString("In addition to the standard PRD/architecture/UX documents, also read:\n\n")
+		if ctx.EpicsFilePath != "" {
+			sb.WriteString(fmt.Sprintf("- **Existing Epics**: `%s`\n", ctx.EpicsFilePath))
+			sb.WriteString("  Understand what's already planned so the new epic doesn't duplicate it.\n")
+		}
+		if len(ctx.RetroFilePaths) > 0 {
+			sb.WriteString("- **Recent Retrospective(s)**:\n")
+			for _, p := range ctx.RetroFilePaths {
+				sb.WriteString(fmt.Sprintf("  - `%s`\n", p))
+			}
+			sb.WriteString("  Apply lessons learned and recommended next-epic priorities.\n")
 		}
 		sb.WriteString("\n")
-		step++
 	}
 
-	if len(ctx.RetroFilePaths) > 0 {
-		sb.WriteString(fmt.Sprintf("**%d. Recent Retrospective(s)** (read for lessons learned and recommended next steps):\n", step))
-		for _, p := range ctx.RetroFilePaths {
-			sb.WriteString(fmt.Sprintf("   `%s`\n", p))
-		}
-		sb.WriteString("\n")
-		step++
-	}
-
-	if ctx.StatusFilePath != "" {
-		sb.WriteString(fmt.Sprintf("**%d. Sprint Status** (confirm what's done, in-progress, or backlogged):\n", step))
-		sb.WriteString(fmt.Sprintf("   `%s`\n", ctx.StatusFilePath))
-		sb.WriteString("\n")
-		step++
-	}
-
+	// --- Prime directive ---
 	if ctx.PrimeDirective != "" {
-		sb.WriteString(fmt.Sprintf("**%d. Prime Directive** (your strategic guide for what to build next):\n\n", step))
+		sb.WriteString("## Prime Directive (Strategic Guide for Epic Focus)\n\n")
+		sb.WriteString("Use the following to determine the theme and focus of the new epic:\n\n")
 		sb.WriteString(ctx.PrimeDirective)
 		sb.WriteString("\n\n")
-		step++
 	}
 
-	// --- Step 2: Decide the focus ---
-	sb.WriteString("## Step 2: Decide the Epic Focus\n\n")
-	sb.WriteString("After reading the files above, determine:\n")
-	sb.WriteString("- What work is already completed or in progress?\n")
-	sb.WriteString("- What does the most recent retrospective recommend?\n")
-	sb.WriteString("- What does the prime directive say to prioritize?\n\n")
-	sb.WriteString("Choose ONE focused theme for this new epic. Good themes (in order of typical priority):\n")
-	sb.WriteString("1. **Hardening** — stability, reliability, error handling, edge cases\n")
-	sb.WriteString("2. **New Features** — valuable additions aligned with the product vision\n")
-	sb.WriteString("3. **Technical Debt** — code quality, refactoring, maintainability\n")
-	sb.WriteString("4. **Performance** — speed, scalability, efficiency\n")
-	sb.WriteString("5. **Testing & Observability** — coverage, monitoring, quality gates\n\n")
+	// --- Autonomous execution guidance ---
+	// Pre-answer the interactive steps so the workflow doesn't halt.
+	sb.WriteString("## Autonomous Execution Instructions\n\n")
+	sb.WriteString("You are running in automated mode — no human is available to respond to prompts.\n")
+	sb.WriteString("Proceed through the correct-course workflow with these pre-decisions:\n\n")
+	sb.WriteString(fmt.Sprintf("- **Change trigger**: All planned work is complete; add Epic %d\n", ctx.NextEpicNum))
+	sb.WriteString("- **Mode**: Batch (present all changes at once, then execute immediately)\n")
+	sb.WriteString("- **Scope**: Direct Adjustment — add new epic and stories only; do NOT modify existing epics\n")
+	sb.WriteString("- **Approval**: Self-approve the Sprint Change Proposal (no human available to approve)\n")
+	sb.WriteString("- **Epic theme**: Let the prime directive above guide the focus area\n\n")
 
-	// --- Step 3: Write the epic ---
+	// --- Required outputs ---
+	// Explicitly require both sprint-status and epics updates to keep them in sync.
+	sb.WriteString("## Required Outputs (Both Are Mandatory)\n\n")
+	sb.WriteString(fmt.Sprintf(
+		"1. **Update `sprint-status.yaml`** (checklist 6.4): Add Epic %d and its stories with status `backlog`\n",
+		ctx.NextEpicNum,
+	))
 	epicsTarget := ctx.EpicsFilePath
 	if epicsTarget == "" {
 		epicsTarget = "_bmad-output/planning-artifacts/epics.md"
 	}
+	sb.WriteString(fmt.Sprintf(
+		"2. **Append to epics document** (`%s`): Add the new epic in BMAD format\n",
+		epicsTarget,
+	))
+	sb.WriteString("\nComplete both before finishing. Do not skip either output.\n\n")
 
-	sb.WriteString("## Step 3: Append the Epic\n\n")
-	sb.WriteString(fmt.Sprintf("Append Epic %d to `%s`.\n\n", ctx.NextEpicNum, epicsTarget))
-	sb.WriteString("**CRITICAL RULES:**\n")
-	sb.WriteString("- APPEND ONLY — do NOT modify or delete any existing content in the file\n")
-	sb.WriteString("- If the file does not exist, create it\n")
-	sb.WriteString("- 3–7 stories per epic; each must be completable independently by a single dev agent\n")
-	sb.WriteString("- Each story delivers user value (no 'set up database' or 'create boilerplate' stories)\n")
-	sb.WriteString("- Stories must NOT depend on future stories within the same epic\n\n")
-	sb.WriteString("Use this EXACT format:\n\n")
-	sb.WriteString("```markdown\n")
-	sb.WriteString(fmt.Sprintf("## Epic %d: [Epic Title]\n\n", ctx.NextEpicNum))
-	sb.WriteString("[One sentence: what user value this epic delivers]\n\n")
-	sb.WriteString(fmt.Sprintf("### Story %d.1: [Story Title]\n\n", ctx.NextEpicNum))
-	sb.WriteString("As a [user type],\n")
-	sb.WriteString("I want [capability],\n")
-	sb.WriteString("So that [value/benefit].\n\n")
-	sb.WriteString("**Acceptance Criteria:**\n\n")
-	sb.WriteString("**Given** [precondition]\n")
-	sb.WriteString("**When** [action]\n")
-	sb.WriteString("**Then** [expected outcome]\n\n")
-	sb.WriteString("[Repeat Story N.M block for each story, 3-7 total]\n")
-	sb.WriteString("```\n\n")
-	sb.WriteString("After writing the epic, confirm: 'Epic ")
-	sb.WriteString(fmt.Sprintf("%d", ctx.NextEpicNum))
-	sb.WriteString(" appended to epics document.'\n")
+	sb.WriteString("---\n\n")
+	sb.WriteString("Now load and execute the BMAD Correct Course workflow below:\n\n")
 
 	return sb.String()
 }

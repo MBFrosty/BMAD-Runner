@@ -131,7 +131,7 @@ func main() {
 					},
 					{
 						Name:  "plan-epics",
-						Usage: "Plan the next epic using the prime directive and update sprint status (targeted epic append + sprint-planning)",
+						Usage: "Plan the next epic using the prime directive via BMAD correct-course workflow",
 						Flags: append(commonFlags,
 							&cli.StringFlag{
 								Name:  "prime-directive",
@@ -454,14 +454,15 @@ func runAuto(c *cli.Context) error {
 
 // runOneEpicPlanning handles one epic planning cycle when all current work is done.
 //
-// It runs two agent invocations in sequence:
-//  1. Plan-epic (RunWithPrompt) — a targeted self-contained prompt that reads the prime
-//     directive, existing epics, recent retrospective(s), and sprint-status, then appends
-//     exactly ONE new epic in BMAD format to the existing epics document.
-//     NOTE: We do NOT use the BMAD create-epics-and-stories command here — that workflow
-//     is designed for initial project planning and regenerates ALL epics from the PRD.
-//  2. sprint-planning — the real BMAD command that reads ALL epic files and rebuilds
-//     sprint-status.yaml, preserving existing story statuses.
+// It runs a single BMAD correct-course agent invocation. correct-course is the
+// "anytime" BMAD workflow for navigating significant changes — including adding new
+// epics to an existing project. It reads all project documents (PRD, architecture,
+// epics, retros), determines what to build next, and updates both sprint-status.yaml
+// (checklist 6.4) and the epics document in a single pass.
+//
+// We do NOT run sprint-planning after correct-course. correct-course writes to
+// sprint-status.yaml directly; a subsequent sprint-planning run would overwrite
+// those entries by rebuilding from epics.md.
 //
 // Returns nil if new work was successfully staged, or a sentinel error for graceful exits.
 func runOneEpicPlanning(
@@ -513,14 +514,7 @@ func runOneEpicPlanning(
 		}
 	}
 
-	// --- Phase A: append one new epic via targeted RunWithPrompt ---
-	// NOTE: We do NOT use the BMAD create-epics-and-stories command here.
-	// That workflow is designed for initial project planning — it re-extracts ALL
-	// requirements from the PRD and regenerates the entire epics document from scratch.
-	// For incremental planning we need a targeted RunWithPrompt that:
-	//   1. Reads the prime directive, existing epics, retros, and sprint-status for context
-	//   2. Appends exactly ONE new epic in BMAD format without touching existing content
-	// Phase B (sprint-planning) is still the real BMAD command for updating sprint-status.yaml.
+	// --- correct-course: plan one new epic and update sprint-status + epics doc ---
 	epicCtx := planner.EpicPlanningContext{
 		PrimeDirective: pdContent,
 		NextEpicNum:    nextEpicNum,
@@ -529,45 +523,25 @@ func runOneEpicPlanning(
 		CompletedEpics: completedEpics,
 		StatusFilePath: statusPath,
 	}
-	epicPrompt := planner.BuildEpicPlanningPrompt(epicCtx)
+	correctCourseContext := planner.BuildCorrectCourseContext(epicCtx)
 	epicModel := c.String("model")
 	if epicModel == "" {
-		epicModel = defaultModelForAgentType(agentType, "plan-epic")
+		epicModel = defaultModelForAgentType(agentType, "correct-course")
 	}
 
-	pterm.Info.Printf("Phase A: appending Epic %d to epics document\n", nextEpicNum)
-	if err := r.RunWithPrompt(epicPrompt, "plan-epic", epicModel); err != nil {
-		pterm.Error.Printf("epic planning failed: %v\n", err)
+	pterm.Info.Printf("Running correct-course to plan Epic %d\n", nextEpicNum)
+	if err := r.RunPhaseWithContext(correctCourseContext, "correct-course", epicModel); err != nil {
+		pterm.Error.Printf("correct-course failed: %v\n", err)
 		return err
 	}
 
-	// --- Phase B: sprint-planning to update sprint-status.yaml ---
-	// IMPORTANT: epics.md is the source of truth in this flow.
-	// Phase A writes new epics to epics.md; Phase B rebuilds sprint-status.yaml from it.
-	//
-	// This is intentionally different from correct-course, which writes directly to
-	// sprint-status.yaml (checklist 6.4) and bypasses epics.md. If a user has run
-	// correct-course manually outside this flow, those sprint-status entries will be
-	// overwritten here unless the corresponding epics are also present in epics.md.
-	// The fix is to ensure any manually-created epics are in epics.md before running auto.
-	sprintModel := c.String("model")
-	if sprintModel == "" {
-		sprintModel = defaultModelForAgentType(agentType, "sprint-planning")
-	}
-
-	pterm.Info.Println("Phase B: sprint-planning (updating sprint-status.yaml)")
-	if err := r.Run("sprint-planning", sprintModel); err != nil {
-		pterm.Error.Printf("sprint-planning failed: %v\n", err)
-		return err
-	}
-
-	// Check whether sprint-status.yaml was actually updated.
+	// Check whether sprint-status.yaml was updated by correct-course (checklist 6.4).
 	statusAfter, err := os.ReadFile(statusPath)
 	if err != nil {
-		return fmt.Errorf("re-reading status file after sprint-planning: %w", err)
+		return fmt.Errorf("re-reading status file after correct-course: %w", err)
 	}
 	if bytes.Equal(statusBefore, statusAfter) {
-		pterm.Warning.Println("sprint-planning did not update sprint-status.yaml — no new stories detected.")
+		pterm.Warning.Println("correct-course did not update sprint-status.yaml — no new stories detected.")
 		return errEpicPlanningNoNewWork
 	}
 
@@ -665,7 +639,9 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "sonnet"
 		// Epic planning uses the most capable model: creating good epics saves
 		// many dev cycles later.
-		case "plan-epic", "sprint-planning":
+		// correct-course is used for incremental epic planning; use the most capable
+		// model since the quality of planned epics determines many future dev cycles.
+		case "correct-course", "sprint-planning":
 			return "opus"
 		default:
 			return "sonnet"
@@ -678,7 +654,7 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "gemini-3-flash"
 		case "code-review", "retrospective":
 			return "gemini-3-pro"
-		case "plan-epic", "sprint-planning":
+		case "correct-course", "sprint-planning":
 			return "gemini-3-pro"
 		default:
 			return "gemini-3-pro"
@@ -691,7 +667,7 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "composer-1.5"
 		case "code-review", "retrospective":
 			return "gemini-3-flash"
-		case "plan-epic", "sprint-planning":
+		case "correct-course", "sprint-planning":
 			return "claude-4.6-sonnet-medium"
 		default:
 			return "composer-1.5"
