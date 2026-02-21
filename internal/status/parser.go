@@ -129,27 +129,31 @@ func (s *SprintStatus) EpicGroups() []EpicGroup {
 // NextWork returns the next action to take: "story", "retrospective", or "" if all done.
 // epicKey is the epic identifier for display.
 // storyKey is the first pending story key when action is "story"; empty for retrospective.
-// Skips retrospectives for epics that have been "passed" (a later epic has pending stories).
+// Processes epics in document order: runs retrospective for completed epics before moving to the next epic's stories.
 func (s *SprintStatus) NextWork() (action, epicKey, storyKey string, found bool) {
 	groups := s.EpicGroups()
 
-	// First pass: find any epic with pending stories
 	for _, g := range groups {
+		allStoriesDone := true
+		var firstPendingStory string
 		for _, st := range g.Stories {
 			if st.Value != "done" && st.Value != "deferred" {
-				return "story", g.EpicKey, st.Key, true
+				allStoriesDone = false
+				if firstPendingStory == "" {
+					firstPendingStory = st.Key
+				}
 			}
 		}
-	}
 
-	// No pending stories: run retrospective only for the last epic that needs it.
-	// Skip retros for "passed" epics (we're focused on a later epic).
-	// Treat both "done" and "completed" as finished (BMAD may use either).
-	for i := len(groups) - 1; i >= 0; i-- {
-		g := groups[i]
-		retroComplete := g.RetroStatus == "done" || g.RetroStatus == "completed"
-		if g.RetroKey != "" && !retroComplete {
-			return "retrospective", g.EpicKey, "", true
+		if allStoriesDone && g.RetroKey != "" {
+			retroComplete := g.RetroStatus == "done" || g.RetroStatus == "completed"
+			if !retroComplete {
+				return "retrospective", g.EpicKey, "", true
+			}
+		}
+
+		if !allStoriesDone {
+			return "story", g.EpicKey, firstPendingStory, true
 		}
 	}
 	return "", "", "", false
