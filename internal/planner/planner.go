@@ -123,7 +123,10 @@ func FindEpicsFile(projectRoot string) string {
 		}
 	}
 	// Fuzzy glob fallback: any *epic*.md in planning-artifacts
-	matches, _ := filepath.Glob(filepath.Join(projectRoot, "_bmad-output", "planning-artifacts", "*epic*.md"))
+	matches, err := filepath.Glob(filepath.Join(projectRoot, "_bmad-output", "planning-artifacts", "*epic*.md"))
+	if err != nil {
+		return ""
+	}
 	if len(matches) > 0 {
 		return matches[0]
 	}
@@ -135,7 +138,10 @@ func FindEpicsFile(projectRoot string) string {
 // pass 0 for no limit.
 func FindRetroFiles(projectRoot string, maxFiles int) []string {
 	pattern := filepath.Join(projectRoot, "_bmad-output", "implementation-artifacts", "epic-*-retro-*.md")
-	matches, _ := filepath.Glob(pattern)
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil
+	}
 	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
 	if maxFiles > 0 && len(matches) > maxFiles {
 		return matches[:maxFiles]
