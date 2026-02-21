@@ -45,7 +45,12 @@ func Parse(path string) (*SprintStatus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading sprint-status file: %w", err)
 	}
+	return ParseBytes(data)
+}
 
+// ParseBytes parses sprint-status YAML from an in-memory byte slice.
+// This is useful when the raw bytes are already loaded (e.g. for stall detection).
+func ParseBytes(data []byte) (*SprintStatus, error) {
 	var status SprintStatus
 	if err := yaml.Unmarshal(data, &status); err != nil {
 		return nil, fmt.Errorf("unmarshaling yaml: %w", err)
@@ -148,6 +153,19 @@ func (s *SprintStatus) NextWork() (action, epicKey, storyKey string, found bool)
 		}
 	}
 	return "", "", "", false
+}
+
+// NextEpicNumber returns the next unused epic number (highest existing number + 1).
+// Returns 1 if no epics are present yet.
+func (s *SprintStatus) NextEpicNumber() int {
+	max := 0
+	for _, g := range s.EpicGroups() {
+		var n int
+		if _, err := fmt.Sscanf(g.EpicKey, "epic-%d", &n); err == nil && n > max {
+			max = n
+		}
+	}
+	return max + 1
 }
 
 // EpicProgress returns (storiesDone, storiesTotal) for the given epic key.

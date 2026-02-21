@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/MBFrosty/BMAD-Runner/internal/agent"
 	"github.com/MBFrosty/BMAD-Runner/internal/config"
+	"github.com/MBFrosty/BMAD-Runner/internal/planner"
 	"github.com/MBFrosty/BMAD-Runner/internal/status"
 	"github.com/MBFrosty/BMAD-Runner/internal/ui"
 
@@ -128,6 +130,25 @@ func main() {
 						},
 					},
 					{
+						Name:  "plan-epics",
+						Usage: "Plan the next epic using the prime directive via BMAD correct-course workflow",
+						Flags: append(commonFlags,
+							&cli.StringFlag{
+								Name:  "prime-directive",
+								Usage: "Path to the prime directive file (default: <project-root>/_bmad-output/prime-directive.md)",
+							},
+							&cli.IntFlag{
+								Name:  "max-new-epics",
+								Usage: "Maximum number of new epics to generate",
+								Value: planner.DefaultMaxEpics,
+							},
+						),
+						Action: func(c *cli.Context) error {
+							ui.PrintBanner()
+							return runPlanEpicsCommand(c)
+						},
+					},
+					{
 						Name:  "auto",
 						Usage: "Loop through pending stories and epics until all done; run retrospective when epic completes",
 						Flags: append(commonFlags,
@@ -143,6 +164,19 @@ func main() {
 							&cli.BoolFlag{
 								Name:  "ignore-stall",
 								Usage: "Continue even when sprint-status.yaml is unchanged after a story (avoids exit on workflow sync failures)",
+							},
+							&cli.BoolFlag{
+								Name:  "enable-epic-planning",
+								Usage: "When all stories are done, automatically plan the next epic via BMAD create-epics-and-stories + sprint-planning",
+							},
+							&cli.StringFlag{
+								Name:  "prime-directive",
+								Usage: "Path to the prime directive file that guides epic planning (default: <project-root>/_bmad-output/prime-directive.md)",
+							},
+							&cli.IntFlag{
+								Name:  "max-new-epics",
+								Usage: "Maximum number of new epics to plan across this auto session (one per no-work event)",
+								Value: planner.DefaultMaxEpics,
 							},
 						),
 						Action: func(c *cli.Context) error {
@@ -281,8 +315,23 @@ func runAuto(c *cli.Context) error {
 	maxIter := c.Int("max-iterations")
 	phases := []string{"create-story", "dev-story", "code-review"}
 	ignoreStall := c.Bool("ignore-stall")
+	enableEpicPlanning := c.Bool("enable-epic-planning")
+	maxNewEpics := c.Int("max-new-epics")
+	if maxNewEpics <= 0 {
+		maxNewEpics = planner.DefaultMaxEpics
+	}
+
 	var lastStalledStory string
 	var stallCount int
+	// epicPlanningCount tracks how many new epics have been planned this session.
+	// Each "no work found" event plans ONE epic (via one targeted BMAD invocation).
+	// Stops when we reach maxNewEpics to prevent unbounded planning.
+	epicPlanningCount := 0
+
+	primeDirectivePath := c.String("prime-directive")
+	if primeDirectivePath == "" {
+		primeDirectivePath = filepath.Join(projectRoot, planner.DefaultPrimeDirectivePath)
+	}
 
 	for iter := 0; iter < maxIter; iter++ {
 		statusData, err := os.ReadFile(statusPath)
@@ -297,8 +346,41 @@ func runAuto(c *cli.Context) error {
 
 		action, epicKey, storyKey, found := s.NextWork()
 		if !found {
-			pterm.Success.Println("All work complete!")
-			return nil
+			if !enableEpicPlanning {
+				pterm.Success.Println("All work complete!")
+				return nil
+			}
+			if epicPlanningCount >= maxNewEpics {
+				// Reached the session planning limit — pause for human review.
+				ui.PrintEpicPlanningSessionComplete(epicPlanningCount, maxNewEpics)
+				return nil
+			}
+
+			// Plan ONE new epic via a targeted BMAD invocation, then continue.
+			nextEpicNum := s.NextEpicNumber()
+			planErr := runOneEpicPlanning(c, r, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
+			switch planErr {
+			case nil:
+				// Sprint-status was updated — loop will pick up the new stories.
+				epicPlanningCount++
+				lastStalledStory = ""
+				stallCount = 0
+			case errEpicPlanningNoNewWork:
+				// BMAD ran but didn't add anything new; stop with a summary.
+				if epicPlanningCount > 0 {
+					ui.PrintEpicPlanningSessionComplete(epicPlanningCount, maxNewEpics)
+				} else {
+					pterm.Success.Println("All work complete!")
+				}
+				return nil
+			case errEpicPlanningPrimeDirectiveCreated:
+				// Newly created prime directive — user must edit before continuing.
+				pterm.Success.Println("All work complete — review the prime directive and re-run to enable epic planning.")
+				return nil
+			default:
+				return planErr
+			}
+			continue
 		}
 
 		done, total := s.EpicProgress(epicKey)
@@ -310,12 +392,12 @@ func runAuto(c *cli.Context) error {
 
 		if action == "retrospective" {
 			pterm.DefaultSection.Printf("Epic %s complete — running retrospective", epicKey)
-			
+
 			phaseModel := c.String("model")
 			if phaseModel == "" {
 				phaseModel = defaultModelForAgentType(agentType, "retrospective")
 			}
-			
+
 			if err := r.Run("retrospective", phaseModel); err != nil {
 				pterm.Error.Printf("Retrospective failed: %v\n", err)
 				return err
@@ -330,12 +412,12 @@ func runAuto(c *cli.Context) error {
 		// Run story pipeline
 		for i, phase := range phases {
 			ui.PrintPipeline(phases, i)
-			
+
 			phaseModel := c.String("model")
 			if phaseModel == "" {
 				phaseModel = defaultModelForAgentType(agentType, phase)
 			}
-			
+
 			if err := r.Run(phase, phaseModel); err != nil {
 				pterm.Error.Printf("Phase %s failed: %v\n", phase, err)
 				return err
@@ -370,6 +452,170 @@ func runAuto(c *cli.Context) error {
 	return fmt.Errorf("max iterations (%d) reached", maxIter)
 }
 
+// runOneEpicPlanning handles one epic planning cycle when all current work is done.
+//
+// It runs a single BMAD correct-course agent invocation. correct-course is the
+// "anytime" BMAD workflow for navigating significant changes — including adding new
+// epics to an existing project. It reads all project documents (PRD, architecture,
+// epics, retros), determines what to build next, and updates both sprint-status.yaml
+// (checklist 6.4) and the epics document in a single pass.
+//
+// We do NOT run sprint-planning after correct-course. correct-course writes to
+// sprint-status.yaml directly; a subsequent sprint-planning run would overwrite
+// those entries by rebuilding from epics.md.
+//
+// Returns nil if new work was successfully staged, or a sentinel error for graceful exits.
+func runOneEpicPlanning(
+	c *cli.Context,
+	r *agent.Runner,
+	statusPath, primeDirectivePath, agentType string,
+	nextEpicNum int,
+	statusBefore []byte,
+) error {
+	pterm.DefaultSection.Printf("No stories remain — planning Epic %d via BMAD workflow", nextEpicNum)
+
+	// Ensure the prime directive exists; create default if missing.
+	created, err := planner.EnsurePrimeDirective(primeDirectivePath)
+	if err != nil {
+		pterm.Warning.Printf("Could not create prime directive: %v\n", err)
+	}
+	if created {
+		pterm.Info.Printf("Created prime directive at: %s\n", primeDirectivePath)
+		pterm.Info.Println("Review and edit it to guide epic planning, then re-run.")
+		return errEpicPlanningPrimeDirectiveCreated
+	}
+
+	pdContent, err := planner.ReadPrimeDirective(primeDirectivePath)
+	if err != nil {
+		return fmt.Errorf("reading prime directive: %w", err)
+	}
+
+	if planner.IsDefaultPrimeDirective(pdContent) {
+		pterm.Warning.Println("Prime directive appears to be unedited — results may be generic.")
+		pterm.Info.Printf("Edit %s to describe your project goals.\n", primeDirectivePath)
+	}
+
+	maxNewEpics := c.Int("max-new-epics")
+	ui.PrintEpicPlanningBanner(primeDirectivePath, nextEpicNum, maxNewEpics)
+
+	// Discover project files to ground the planning context in actual project state.
+	projectRoot, _, _ := config.ResolveProjectRoot(c.String("status-file"), c.String("project-root"))
+	epicsFile := planner.FindEpicsFile(projectRoot)
+	retroFiles := planner.FindRetroFiles(projectRoot, 2) // include at most last 2 retros
+
+	// Collect the list of fully-completed epic keys so the agent knows what's already built.
+	// Parse the status from statusBefore (the snapshot taken just before planning starts).
+	var completedEpics []string
+	if s, parseErr := status.ParseBytes(statusBefore); parseErr == nil {
+		for _, g := range s.EpicGroups() {
+			if s.DevStatus[g.EpicKey] == "done" {
+				completedEpics = append(completedEpics, g.EpicKey)
+			}
+		}
+	}
+
+	// --- correct-course: plan one new epic and update sprint-status + epics doc ---
+	epicCtx := planner.EpicPlanningContext{
+		PrimeDirective: pdContent,
+		NextEpicNum:    nextEpicNum,
+		EpicsFilePath:  epicsFile,
+		RetroFilePaths: retroFiles,
+		CompletedEpics: completedEpics,
+		StatusFilePath: statusPath,
+	}
+	correctCourseContext := planner.BuildCorrectCourseContext(epicCtx)
+	epicModel := c.String("model")
+	if epicModel == "" {
+		epicModel = defaultModelForAgentType(agentType, "correct-course")
+	}
+
+	pterm.Info.Printf("Running correct-course to plan Epic %d\n", nextEpicNum)
+	if err := r.RunPhaseWithContext(correctCourseContext, "correct-course", epicModel); err != nil {
+		pterm.Error.Printf("correct-course failed: %v\n", err)
+		return err
+	}
+
+	// Check whether sprint-status.yaml was updated by correct-course (checklist 6.4).
+	statusAfter, err := os.ReadFile(statusPath)
+	if err != nil {
+		return fmt.Errorf("re-reading status file after correct-course: %w", err)
+	}
+	if bytes.Equal(statusBefore, statusAfter) {
+		pterm.Warning.Println("correct-course did not update sprint-status.yaml — no new stories detected.")
+		return errEpicPlanningNoNewWork
+	}
+
+	pterm.Success.Printf("Epic %d staged — continuing auto loop.\n", nextEpicNum)
+	pterm.Println()
+
+	// Pause for review in interactive terminals (reuse --no-pause-after-retro flag).
+	if !c.Bool("no-pause-after-retro") && term.IsTerminal(int(os.Stdin.Fd())) {
+		pterm.Info.Printf("Review the planned epic, then press Enter to begin development...\n")
+		bufio.NewReader(os.Stdin).ReadBytes('\n')
+	}
+
+	return nil
+}
+
+// runPlanEpicsCommand is the action for `bmad-runner run plan-epics`.
+// Plans the next epic standalone (without the auto loop).
+func runPlanEpicsCommand(c *cli.Context) error {
+	projectRoot, statusPath, err := config.ResolveProjectRoot(c.String("status-file"), c.String("project-root"))
+	if err != nil {
+		return fmt.Errorf("resolving project root: %w", err)
+	}
+
+	agentType := resolveAgentType(c.String("agent-type"))
+	agentPath, err := config.LookupAgent(c.String("agent-path"), agentType)
+	if err != nil {
+		return fmt.Errorf("looking up agent: %w", err)
+	}
+
+	r := &agent.Runner{
+		AgentPath:    agentPath,
+		AgentType:    agentType,
+		ProjectRoot:  projectRoot,
+		NoLiveStatus: c.Bool("no-live-status") || !term.IsTerminal(int(os.Stdout.Fd())),
+	}
+
+	primeDirectivePath := c.String("prime-directive")
+	if primeDirectivePath == "" {
+		primeDirectivePath = filepath.Join(projectRoot, planner.DefaultPrimeDirectivePath)
+	}
+
+	statusData, err := os.ReadFile(statusPath)
+	if err != nil {
+		return fmt.Errorf("reading status file: %w", err)
+	}
+
+	s, err := status.Parse(statusPath)
+	if err != nil {
+		return fmt.Errorf("parsing status file: %w", err)
+	}
+
+	nextEpicNum := s.NextEpicNumber()
+	planErr := runOneEpicPlanning(c, r, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
+	switch planErr {
+	case nil:
+		pterm.Success.Printf("Epic %d planning complete.\n", nextEpicNum)
+	case errEpicPlanningPrimeDirectiveCreated, errEpicPlanningNoNewWork:
+		// Graceful exit — message already printed.
+	default:
+		return planErr
+	}
+	return nil
+}
+
+// Sentinel errors for runOneEpicPlanning — treated as graceful exits (exit 0).
+var (
+	// errEpicPlanningNoNewWork is returned when the BMAD correct-course phase ran but sprint-status
+	// was not updated (e.g. the agent didn't find/add anything new).
+	errEpicPlanningNoNewWork = fmt.Errorf("epic planning: no new work added to sprint-status")
+	// errEpicPlanningPrimeDirectiveCreated is returned when a default prime directive
+	// was just created and the user must review it before planning can run.
+	errEpicPlanningPrimeDirectiveCreated = fmt.Errorf("prime directive created: review and re-run")
+)
+
 func resolveAgentType(s string) string {
 	switch s {
 	case config.AgentTypeClaudeCode:
@@ -386,11 +632,17 @@ func defaultModelForAgentType(agentType string, phase string) string {
 	case config.AgentTypeClaudeCode:
 		switch phase {
 		case "create-story":
-			return "opus" // bigger expensive model
+			return "opus"
 		case "dev-story":
-			return "haiku" // light fast model
+			return "haiku"
 		case "code-review", "retrospective":
-			return "sonnet" // medium model
+			return "sonnet"
+		// Epic planning uses the most capable model: creating good epics saves
+		// many dev cycles later.
+		// correct-course is used for incremental epic planning; use the most capable
+		// model since the quality of planned epics determines many future dev cycles.
+		case "correct-course", "sprint-planning":
+			return "opus"
 		default:
 			return "sonnet"
 		}
@@ -401,6 +653,8 @@ func defaultModelForAgentType(agentType string, phase string) string {
 		case "dev-story":
 			return "gemini-3-flash"
 		case "code-review", "retrospective":
+			return "gemini-3-pro"
+		case "correct-course", "sprint-planning":
 			return "gemini-3-pro"
 		default:
 			return "gemini-3-pro"
@@ -413,6 +667,8 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "composer-1.5"
 		case "code-review", "retrospective":
 			return "gemini-3-flash"
+		case "correct-course", "sprint-planning":
+			return "claude-4.6-sonnet-medium"
 		default:
 			return "composer-1.5"
 		}

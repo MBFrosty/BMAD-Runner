@@ -8,6 +8,7 @@ Orchestrate BMAD workflow phases (`create-story` → `dev-story` → `code-revie
 - **Workflow Orchestration**: Supports individual phases (`create-story`, `dev-story`, `code-review`) and automated full-pipeline execution.
 - **Retrospectives**: Automatically runs an epic retrospective when all stories in an epic are completed.
 - **Auto-Looping**: Continually works through pending stories and epics until all work is done.
+- **Automated Epic Planning**: When all stories are complete, automatically plans new epics (hardening, features, tech debt) guided by a project-level **prime directive** you edit. Up to 5 new epics are staged into `sprint-status.yaml` so the loop can continue without manual intervention.
 - **Stall Detection**: Detects if the agent fails to update the sprint status and safely halts to prevent infinite loops.
 - **Smart Model Defaults**: Uses different models optimized for different phases of work (e.g., cheaper/faster models for typical dev loops, smarter models for reviews and planning).
 
@@ -82,6 +83,58 @@ Runs the full pipeline (`create-story` → `dev-story` → `code-review`) for ea
 - **Stall handling**: If `sprint-status.yaml` is unchanged after a story (workflow didn't update it), the runner warns and continues. After 2 consecutive stalls for the same story, it exits. Use `--ignore-stall` to never exit on stall.
 - **After retrospective**: Prompts "Press Enter to continue to next epic" (interactive terminal only). Use `--no-pause-after-retro` for scripts/CI to skip the prompt.
 
+### Run auto with automated epic planning
+```bash
+./bin/bmad-runner run auto --enable-epic-planning
+```
+When all current stories are complete, the runner automatically plans **one new epic at a time** using the BMAD `correct-course` workflow, then continues development on the newly planned stories. After reaching the session cap (`--max-new-epics`, default 5), it pauses and prompts you to review before continuing.
+
+**How it works — one epic at a time:**
+
+1. When no stories remain, the runner checks for a **prime directive** at `_bmad-output/prime-directive.md`.
+2. If the file doesn't exist, it is **created with a default template** — the runner exits for you to fill it in.
+3. For each planning cycle (up to `--max-new-epics`), a single targeted BMAD `correct-course` invocation runs:
+   - **`correct-course`**: The BMAD workflow runs with the prime directive as context, scoped to adding one new epic (Epic N) to the existing project. The agent reads your prime directive plus existing artifacts (PRD, architecture, retrospectives), writes the new epic to the planning artifacts folder, and updates `sprint-status.yaml` — preserving all existing story statuses with only new entries added.
+4. The auto loop picks up the new stories and develops them through the full pipeline.
+5. When the session cap is reached, the runner **pauses and prints a summary** telling you how many epics were planned and what to do next — keeping a human in the loop.
+
+**Human-in-the-loop design:**
+
+The runner never plans indefinitely. After `--max-new-epics` epics, it stops with clear instructions:
+```
+Epic Planning Session Complete — Human Review Requested
+Planned 5 new epic(s) this session (limit: 5).
+The runner is pausing here so you can review what was planned.
+
+  Next steps:
+  1. Review the newly planned epics in _bmad-output/planning-artifacts/
+  2. Check the updated sprint-status.yaml for accuracy
+  3. Edit the prime directive if needed (_bmad-output/prime-directive.md)
+  4. Re-run with --enable-epic-planning to continue development
+```
+
+**Prime Directive (`_bmad-output/prime-directive.md`):**
+
+The prime directive is a small markdown file you edit to steer the AI planner. Each planning cycle, it is prepended as context to the BMAD `correct-course` workflow. Include:
+- Your project's vision and north star
+- Current focus areas (hardening, new features, tech debt, etc.)
+- Constraints and guardrails
+- Goals for the next development phase
+
+**Options for `run auto --enable-epic-planning`:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--enable-epic-planning` | Enable automated epic planning when no work remains | off |
+| `--prime-directive <path>` | Path to the prime directive file | `<project-root>/_bmad-output/prime-directive.md` |
+| `--max-new-epics <N>` | Session cap: max epics to plan before pausing for human review | `5` |
+
+### Plan the next epic manually
+```bash
+./bin/bmad-runner run plan-epics
+```
+Runs one epic planning cycle standalone (create-epics-and-stories + sprint-planning) without the auto loop. Useful for targeted planning or testing the workflow. Respects `--prime-directive`.
+
 ## Configuration Options
 
 You can customize the runner using global flags (works with any run method):
@@ -104,12 +157,13 @@ Use the `--model` (or `-m`) flag to override the model used by the agent. If you
 
 **Default Models by Agent and Phase:**
 
-| Agent | `create-story` | `dev-story` | `code-review` / `retrospective` | Fallback / Default |
-|-------|----------------|-------------|---------------------------------|--------------------|
-| **`cursor-agent`** | `gemini-3.1-pro` | `composer-1.5` | `gemini-3-flash` | `composer-1.5` |
-| **`claude-code`**| `opus` | `haiku` | `sonnet` | `sonnet` |
-| **`gemini-cli`** | `gemini-3-pro` | `gemini-3-flash`| `gemini-3-pro` | `gemini-3-pro` |
+| Agent | `create-story` | `dev-story` | `code-review` / `retrospective` | `correct-course` (`plan-epics`) | Fallback / Default |
+|-------|----------------|-------------|---------------------------------|-------------------------------|---------------------|
+| **`cursor-agent`** | `claude-4.6-sonnet-medium` | `composer-1.5` | `gemini-3-flash` | `claude-4.6-sonnet-medium` | `composer-1.5` |
+| **`claude-code`**| `opus` | `haiku` | `sonnet` | `opus` | `sonnet` |
+| **`gemini-cli`** | `gemini-3-pro` | `gemini-3-flash`| `gemini-3-pro` | `gemini-3-pro` | `gemini-3-pro` |
 
+Note: The `plan-epics` command runs the internal `correct-course` phase; the models in that column are used when you run `plan-epics`.
 ### Examples
 
 ```bash
@@ -127,4 +181,14 @@ Use the `--model` (or `-m`) flag to override the model used by the agent. If you
 
 # Use gemini-cli with its default phase-specific models
 ./bin/bmad-runner --agent-type gemini-cli run auto
+
+# Enable automated epic planning when all stories are done
+./bin/bmad-runner --agent-type claude-code run auto --enable-epic-planning
+
+# Cap the planner at 3 epics and use a custom prime directive location
+./bin/bmad-runner run auto --enable-epic-planning --max-new-epics 3 \
+  --prime-directive /path/to/my-goals.md
+
+# Plan new epics manually (standalone, no auto loop)
+./bin/bmad-runner --agent-type claude-code run plan-epics
 ```

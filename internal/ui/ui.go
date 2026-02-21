@@ -182,6 +182,35 @@ func PrintEpicProgress(epicKey string, storiesDone, storiesTotal int) {
 	pterm.Println()
 }
 
+// PrintEpicPlanningBanner prints a banner before a single-epic automated planning run.
+// nextEpicNum is the epic number being planned; sessionCap is the max for this session.
+func PrintEpicPlanningBanner(primeDirectivePath string, nextEpicNum, sessionCap int) {
+	pterm.DefaultSection.Println("Automated Epic Planning")
+	pterm.Info.Printf("Planning:     Epic %d\n", nextEpicNum)
+	pterm.Info.Printf("Session cap:  %d epic(s) max\n", sessionCap)
+	pterm.Info.Printf("Prime directive: %s\n", primeDirectivePath)
+	pterm.Println()
+	pterm.Println(pterm.Cyan("  ◈  correct-course (plan Epic N + update sprint-status.yaml)"))
+	pterm.Println()
+}
+
+// PrintEpicPlanningSessionComplete prints a human-in-the-loop pause message after the
+// runner reaches its epic planning limit for this session.
+func PrintEpicPlanningSessionComplete(epicCount, sessionCap int) {
+	pterm.Println()
+	pterm.DefaultHeader.WithFullWidth().Println("Epic Planning Session Complete — Human Review Requested")
+	pterm.Println()
+	pterm.Success.Printf("Planned %d new epic(s) this session (limit: %d).\n", epicCount, sessionCap)
+	pterm.Info.Println("The runner is pausing here so you can review what was planned.")
+	pterm.Println()
+	pterm.Println(pterm.Cyan("  Next steps:"))
+	pterm.Println(pterm.Gray("  1. Review the newly planned epics in _bmad-output/planning-artifacts/"))
+	pterm.Println(pterm.Gray("  2. Check the updated sprint-status.yaml for accuracy"))
+	pterm.Println(pterm.Gray("  3. Edit the prime directive if needed (_bmad-output/prime-directive.md)"))
+	pterm.Println(pterm.Gray("  4. Re-run with --enable-epic-planning to continue development"))
+	pterm.Println()
+}
+
 // WorkPlan holds the next work item from sprint-status for display.
 type WorkPlan struct {
 	Action    string // "story", "retrospective", or ""
