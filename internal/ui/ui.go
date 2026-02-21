@@ -147,7 +147,7 @@ func NewPhaseSpinner() *pterm.SpinnerPrinter {
 // agentOutputLabel is the static label in the top border (no line between words).
 const agentOutputLabel = " agent output "
 
-// PhaseDisplay renders a Matrix rain braille strip and rolling log preview in-place
+// PhaseDisplay renders a pong-bounce strip and rolling log preview in-place
 // using atomicgo/cursor Area. Heavy box with static "agent output" label.
 type PhaseDisplay struct {
 	area         cursor.Area
@@ -170,7 +170,7 @@ func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
 }
 
 // Tick advances the animation by one frame and redraws with the provided log lines.
-// Uses heavy box with static "agent output" label and Matrix rain braille strip.
+// Uses heavy box with static "agent output" label and pong-bounce strip.
 func (d *PhaseDisplay) Tick(logLines []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -182,8 +182,8 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	truncate := func(s string) string { return runewidth.Truncate(s, cordonBoxWidth, "…") }
 
 	interiorWidth := cordonBoxWidth + 2
-	topLen := interiorWidth - 2
-	bottomLen := interiorWidth - 2
+	topLen := interiorWidth
+	bottomLen := interiorWidth
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("  Executing %s...\n\n", d.phase))
@@ -199,7 +199,7 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	leftDashes := dashTotal / 2
 	rightDashes := dashTotal - leftDashes
 	topLine := "┏" + strings.Repeat("━", leftDashes) + agentOutputLabel + strings.Repeat("━", rightDashes) + "┓"
-	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleStripLine(d.frameIdx, 0, totalLines), topLine))
+	sb.WriteString(fmt.Sprintf("  %s%s\n", DemoStripLine(DemoStylePongBounce, d.frameIdx, 0, totalLines), topLine))
 
 	// Content lines: keep log readable — no rotating chars in content area
 	for i := 0; i < d.logLineCount; i++ {
@@ -212,12 +212,12 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 			pad = 0
 		}
 		inner := " " + content + strings.Repeat(" ", pad) + " "
-		sb.WriteString(fmt.Sprintf("  %s   ┃%s┃\n", brailleStripLine(d.frameIdx, 1+i, totalLines), inner))
+		sb.WriteString(fmt.Sprintf("  %s┃%s┃\n", DemoStripLine(DemoStylePongBounce, d.frameIdx, 1+i, totalLines), inner))
 	}
 
 	// Bottom line: ┗ + dashes + ┛
 	bottomLine := "┗" + strings.Repeat("━", bottomLen) + "┛"
-	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleStripLine(d.frameIdx, totalLines-1, totalLines), bottomLine))
+	sb.WriteString(fmt.Sprintf("  %s%s\n", DemoStripLine(DemoStylePongBounce, d.frameIdx, totalLines-1, totalLines), bottomLine))
 	d.area.Update(sb.String())
 }
 

@@ -60,6 +60,35 @@ func main() {
 		UseShortOptionHandling: true,
 		Commands: []*cli.Command{
 			{
+				Name:  "demo-anim",
+				Usage: "Preview animation styles for the agent output box (for choosing alternatives to matrix rain)",
+				Flags: []cli.Flag{
+					&cli.IntFlag{
+						Name:  "option",
+						Usage: "Animation style 1-2 (omit to run both): 1=wave stream, 2=pong bounce",
+						Value: 0,
+					},
+					&cli.DurationFlag{
+						Name:  "duration",
+						Usage: "Seconds per animation (default 4s; use 2 for quick preview)",
+						Value: 0,
+					},
+				},
+				Action: func(c *cli.Context) error {
+					opt := c.Int("option")
+					dur := c.Duration("duration")
+					if opt == 0 {
+						ui.RunAllDemoAnims(dur)
+						return nil
+					}
+					if opt < 1 || opt > 2 {
+						return fmt.Errorf("option must be 1-2, got %d", opt)
+					}
+					ui.RunDemoAnim(ui.DemoStripStyle(opt), dur)
+					return nil
+				},
+			},
+			{
 				Name:  "status",
 				Usage: "Show current sprint status from YAML",
 				Flags: commonFlags,
