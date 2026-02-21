@@ -309,7 +309,7 @@ func runPhase(c *cli.Context, phase string) error {
 
 	model := c.String("model")
 	if model == "" {
-		model = defaultModelForAgentType(agentType, phase)
+		model = config.DefaultModel(agentType, phase)
 	}
 
 	r := &agent.Runner{
@@ -424,7 +424,7 @@ func runAuto(c *cli.Context) error {
 
 			phaseModel := c.String("model")
 			if phaseModel == "" {
-				phaseModel = defaultModelForAgentType(agentType, "retrospective")
+				phaseModel = config.DefaultModel(agentType, "retrospective")
 			}
 
 			if err := r.Run("retrospective", phaseModel); err != nil {
@@ -444,7 +444,7 @@ func runAuto(c *cli.Context) error {
 
 			phaseModel := c.String("model")
 			if phaseModel == "" {
-				phaseModel = defaultModelForAgentType(agentType, phase)
+				phaseModel = config.DefaultModel(agentType, phase)
 			}
 
 			if err := r.Run(phase, phaseModel); err != nil {
@@ -545,7 +545,7 @@ func runOneEpicPlanning(
 
 	epicModel := c.String("model")
 	if epicModel == "" {
-		epicModel = defaultModelForAgentType(agentType, "correct-course")
+		epicModel = config.DefaultModel(agentType, "correct-course")
 	}
 
 	// --- Feature Scout: propose one concrete feature before invoking correct-course ---
@@ -687,51 +687,5 @@ func resolveAgentType(s string) string {
 		return config.AgentTypeGeminiCLI
 	default:
 		return config.AgentTypeCursorAgent
-	}
-}
-
-func defaultModelForAgentType(agentType string, phase string) string {
-	switch agentType {
-	case config.AgentTypeClaudeCode:
-		switch phase {
-		case "create-story":
-			return "sonnet"
-		case "dev-story":
-			return "haiku"
-		case "code-review", "retrospective":
-			return "sonnet"
-		case "correct-course":
-			return "sonnet"
-		case "sprint-planning":
-			return "sonnet"
-		default:
-			return "sonnet"
-		}
-	case config.AgentTypeGeminiCLI:
-		switch phase {
-		case "create-story":
-			return "gemini-3-pro"
-		case "dev-story":
-			return "gemini-3-flash"
-		case "code-review", "retrospective":
-			return "gemini-3-pro"
-		case "correct-course", "sprint-planning":
-			return "gemini-3-pro"
-		default:
-			return "gemini-3-pro"
-		}
-	default: // CursorAgent
-		switch phase {
-		case "create-story":
-			return "claude-4.6-sonnet-medium"
-		case "dev-story":
-			return "composer-1.5"
-		case "code-review", "retrospective":
-			return "gemini-3-flash"
-		case "correct-course", "sprint-planning":
-			return "claude-4.6-sonnet-medium"
-		default:
-			return "composer-1.5"
-		}
 	}
 }
