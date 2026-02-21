@@ -17,7 +17,8 @@ type Config struct {
 
 // ResolveProjectRoot attempts to find the project root based on the status file path.
 // If statusFile is relative, it's resolved against the current working directory.
-// Default project root is 2 levels up from status file.
+// When status file is in the standard BMAD location (_bmad-output/implementation-artifacts/),
+// project root is 3 levels up. For non-standard paths, falls back to the status file's directory.
 func ResolveProjectRoot(statusFile string, projectRootOverride string) (string, string, error) {
 	absStatusFile, err := filepath.Abs(statusFile)
 	if err != nil {
@@ -32,8 +33,14 @@ func ResolveProjectRoot(statusFile string, projectRootOverride string) (string, 
 		return absRoot, absStatusFile, nil
 	}
 
-	// Default project root is 2 levels up from _bmad-output/implementation-artifacts/sprint-status.yaml
+	// Default project root is 3 levels up from _bmad-output/implementation-artifacts/sprint-status.yaml.
+	// For non-standard paths (e.g. /tmp/sprint-status.yaml or ./sprint-status.yaml), going 3 levels up
+	// can yield the filesystem root "/", which is wrong. Fall back to the directory containing the
+	// status file in that case.
 	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(absStatusFile)))
+	if projectRoot == "" || projectRoot == "/" || projectRoot == filepath.VolumeName(projectRoot)+string(filepath.Separator) {
+		projectRoot = filepath.Dir(absStatusFile)
+	}
 	return projectRoot, absStatusFile, nil
 }
 
