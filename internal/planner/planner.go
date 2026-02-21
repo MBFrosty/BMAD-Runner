@@ -261,6 +261,7 @@ func BuildFeatureProposalPrompt(ctx EpicPlanningContext) string {
 
 	sb.WriteString("## Step 3 — Write the Feature Proposal File\n\n")
 	sb.WriteString(fmt.Sprintf("Write your proposal to exactly this path: `%s`\n\n", outputPath))
+	sb.WriteString("If the parent directory for this path does not exist, create it before writing the file (for example, by using a `mkdir -p`-style command).\n\n")
 	sb.WriteString("Use this exact markdown structure:\n\n")
 	sb.WriteString("```markdown\n")
 	sb.WriteString(fmt.Sprintf("# Epic %d Feature Proposal\n\n", ctx.NextEpicNum))
