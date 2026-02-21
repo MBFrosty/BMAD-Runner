@@ -507,9 +507,9 @@ func runOneEpicPlanning(
 	// Parse the status from statusBefore (the snapshot taken just before planning starts).
 	var completedEpics []string
 	if s, parseErr := status.ParseBytes(statusBefore); parseErr == nil {
-		for k, v := range s.DevStatus {
-			if strings.HasPrefix(k, "epic-") && !strings.Contains(k, "-retrospective") && v == "done" {
-				completedEpics = append(completedEpics, k)
+		for _, g := range s.EpicGroups() {
+			if s.DevStatus[g.EpicKey] == "done" {
+				completedEpics = append(completedEpics, g.EpicKey)
 			}
 		}
 	}

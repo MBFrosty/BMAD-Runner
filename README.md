@@ -87,15 +87,14 @@ Runs the full pipeline (`create-story` → `dev-story` → `code-review`) for ea
 ```bash
 ./bin/bmad-runner run auto --enable-epic-planning
 ```
-When all current stories are complete, the runner automatically plans **one new epic at a time** using the actual BMAD `create-epics-and-stories` and `sprint-planning` workflows, then continues development on the newly planned stories. After reaching the session cap (`--max-new-epics`, default 5), it pauses and prompts you to review before continuing.
+When all current stories are complete, the runner automatically plans **one new epic at a time** using the BMAD `correct-course` workflow, then continues development on the newly planned stories. After reaching the session cap (`--max-new-epics`, default 5), it pauses and prompts you to review before continuing.
 
 **How it works — one epic at a time:**
 
 1. When no stories remain, the runner checks for a **prime directive** at `_bmad-output/prime-directive.md`.
 2. If the file doesn't exist, it is **created with a default template** — the runner exits for you to fill it in.
-3. For each planning cycle (up to `--max-new-epics`), two targeted BMAD agent invocations run back-to-back:
-   - **Phase A — `create-epics-and-stories`**: The real BMAD workflow runs with a small prime-directive context preamble, scoped to adding one new epic (Epic N) to the existing project. The agent reads your prime directive plus existing artifacts (PRD, architecture, retrospectives) and writes the new epic to the planning artifacts folder.
-   - **Phase B — `sprint-planning`**: The real BMAD sprint-planning workflow reads all epic files and updates `sprint-status.yaml`, preserving all existing story statuses. Only new entries are added.
+3. For each planning cycle (up to `--max-new-epics`), a single targeted BMAD `correct-course` invocation runs:
+   - **`correct-course`**: The BMAD workflow runs with the prime directive as context, scoped to adding one new epic (Epic N) to the existing project. The agent reads your prime directive plus existing artifacts (PRD, architecture, retrospectives), writes the new epic to the planning artifacts folder, and updates `sprint-status.yaml` — preserving all existing story statuses with only new entries added.
 4. The auto loop picks up the new stories and develops them through the full pipeline.
 5. When the session cap is reached, the runner **pauses and prints a summary** telling you how many epics were planned and what to do next — keeping a human in the loop.
 
@@ -116,7 +115,7 @@ The runner is pausing here so you can review what was planned.
 
 **Prime Directive (`_bmad-output/prime-directive.md`):**
 
-The prime directive is a small markdown file you edit to steer the AI planner. Each planning cycle, it is prepended as context to the BMAD `create-epics-and-stories` workflow. Include:
+The prime directive is a small markdown file you edit to steer the AI planner. Each planning cycle, it is prepended as context to the BMAD `correct-course` workflow. Include:
 - Your project's vision and north star
 - Current focus areas (hardening, new features, tech debt, etc.)
 - Constraints and guardrails

@@ -190,8 +190,7 @@ func PrintEpicPlanningBanner(primeDirectivePath string, nextEpicNum, sessionCap 
 	pterm.Info.Printf("Session cap:  %d epic(s) max\n", sessionCap)
 	pterm.Info.Printf("Prime directive: %s\n", primeDirectivePath)
 	pterm.Println()
-	pterm.Println(pterm.Cyan("  ◈  Phase A: create-epics-and-stories (one new epic)"))
-	pterm.Println(pterm.Cyan("  ◈  Phase B: sprint-planning (update sprint-status.yaml)"))
+	pterm.Println(pterm.Cyan("  ◈  correct-course (plan Epic N + update sprint-status.yaml)"))
 	pterm.Println()
 }
 
