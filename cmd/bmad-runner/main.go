@@ -632,17 +632,15 @@ func defaultModelForAgentType(agentType string, phase string) string {
 	case config.AgentTypeClaudeCode:
 		switch phase {
 		case "create-story":
-			return "opus"
+			return "sonnet"
 		case "dev-story":
 			return "haiku"
 		case "code-review", "retrospective":
 			return "sonnet"
-		// Epic planning uses the most capable model: creating good epics saves
-		// many dev cycles later.
-		// correct-course is used for incremental epic planning; use the most capable
-		// model since the quality of planned epics determines many future dev cycles.
-		case "correct-course", "sprint-planning":
-			return "opus"
+		case "correct-course":
+			return "sonnet"
+		case "sprint-planning":
+			return "sonnet"
 		default:
 			return "sonnet"
 		}
