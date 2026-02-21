@@ -608,7 +608,7 @@ func runPlanEpicsCommand(c *cli.Context) error {
 
 // Sentinel errors for runOneEpicPlanning — treated as graceful exits (exit 0).
 var (
-	// errEpicPlanningNoNewWork is returned when both BMAD phases ran but sprint-status
+	// errEpicPlanningNoNewWork is returned when the BMAD correct-course phase ran but sprint-status
 	// was not updated (e.g. the agent didn't find/add anything new).
 	errEpicPlanningNoNewWork = fmt.Errorf("epic planning: no new work added to sprint-status")
 	// errEpicPlanningPrimeDirectiveCreated is returned when a default prime directive
