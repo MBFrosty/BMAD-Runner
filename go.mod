@@ -5,6 +5,7 @@ go 1.24.13
 require (
 	atomicgo.dev/cursor v0.2.0
 	github.com/creack/pty v1.1.24
+	github.com/mattn/go-runewidth v0.0.16
 	github.com/pterm/pterm v0.12.82
 	github.com/urfave/cli/v2 v2.27.7
 	golang.org/x/term v0.32.0
@@ -18,7 +19,6 @@ require (
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/gookit/color v1.5.4 // indirect
 	github.com/lithammer/fuzzysearch v1.1.8 // indirect
-	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect

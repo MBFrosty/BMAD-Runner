@@ -8,14 +8,15 @@ import (
 	"time"
 
 	"atomicgo.dev/cursor"
+	"github.com/mattn/go-runewidth"
 	"github.com/pterm/pterm"
 )
 
 // ansiEscape strips ANSI escape sequences (e.g. \033[31m) from a string.
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
-// FormatLastLineForStatus truncates and sanitizes a line for display in the spinner.
-// Strips ANSI codes and control chars, truncates to statusTruncate chars.
+// FormatLastLineForStatus truncates and sanitizes a line for display in the cordoned section.
+// Strips ANSI codes and control chars, truncates to statusTruncate display width (runewidth).
 func FormatLastLineForStatus(line string) string {
 	line = ansiEscape.ReplaceAllString(line, "")
 	line = strings.ReplaceAll(line, "\r", " ")
@@ -27,10 +28,7 @@ func FormatLastLineForStatus(line string) string {
 		return r
 	}, line)
 	line = strings.TrimSpace(line)
-	if len(line) > statusTruncate {
-		return line[:statusTruncate-3] + "..."
-	}
-	return line
+	return runewidth.Truncate(line, statusTruncate, "...")
 }
 
 const statusTruncate = 60
@@ -105,8 +103,11 @@ func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
 	}
 }
 
+// cordonContentWidth is the display width of the agent output content inside the box.
+const cordonContentWidth = statusTruncate
+
 // Tick advances the animation by one frame and redraws with the provided log lines.
-// Serialized to prevent overlapping updates.
+// Serialized to prevent overlapping updates. Output is cordoned in a fixed box.
 func (d *PhaseDisplay) Tick(logLines []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -117,13 +118,24 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	d.frameIdx++
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s  Executing %s...\n", frame, d.phase))
-	for i := 0; i < d.logLineCount; i++ {
-		if i < len(logLines) {
-			sb.WriteString(fmt.Sprintf("  │ %s\n", FormatLastLineForStatus(logLines[i])))
-		} else {
-			sb.WriteString("  │\n")
-		}
+	// Top border
+	dashCount := cordonContentWidth - runewidth.StringWidth("─ agent output ─")
+	if dashCount < 0 {
+		dashCount = 0
 	}
+	sb.WriteString("  ┌─ agent output ─" + strings.Repeat("─", dashCount) + "┐\n")
+	for i := 0; i < d.logLineCount; i++ {
+		var content string
+		if i < len(logLines) {
+			content = FormatLastLineForStatus(logLines[i])
+		}
+		pad := cordonContentWidth - runewidth.StringWidth(content)
+		if pad < 0 {
+			pad = 0
+		}
+		sb.WriteString("  │ " + content + strings.Repeat(" ", pad) + " │\n")
+	}
+	sb.WriteString("  └" + strings.Repeat("─", cordonContentWidth+2) + "┘\n")
 	d.area.Update(sb.String())
 }
 

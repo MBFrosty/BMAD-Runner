@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	// lastLinesMax is the cordoned agent output line count (3 or 5). Bump to 5 if more context needed.
 	lastLinesMax  = 3
 	frameInterval = 80 * time.Millisecond
 )
