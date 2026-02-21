@@ -131,7 +131,7 @@ func main() {
 					},
 					{
 						Name:  "plan-epics",
-						Usage: "Plan the next epic using the prime directive and update sprint status (runs create-epics-and-stories + sprint-planning)",
+						Usage: "Plan the next epic using the prime directive and update sprint status (targeted epic append + sprint-planning)",
 						Flags: append(commonFlags,
 							&cli.StringFlag{
 								Name:  "prime-directive",
@@ -454,11 +454,14 @@ func runAuto(c *cli.Context) error {
 
 // runOneEpicPlanning handles one epic planning cycle when all current work is done.
 //
-// It runs two targeted BMAD agent invocations in sequence:
-//  1. create-epics-and-stories — with a prime-directive context preamble to scope it
-//     to one new incremental epic (nextEpicNum) for the existing project.
-//  2. sprint-planning — the standard BMAD workflow that reads ALL epic files and
-//     rebuilds sprint-status.yaml, preserving existing story statuses.
+// It runs two agent invocations in sequence:
+//  1. Plan-epic (RunWithPrompt) — a targeted self-contained prompt that reads the prime
+//     directive, existing epics, recent retrospective(s), and sprint-status, then appends
+//     exactly ONE new epic in BMAD format to the existing epics document.
+//     NOTE: We do NOT use the BMAD create-epics-and-stories command here — that workflow
+//     is designed for initial project planning and regenerates ALL epics from the PRD.
+//  2. sprint-planning — the real BMAD command that reads ALL epic files and rebuilds
+//     sprint-status.yaml, preserving existing story statuses.
 //
 // Returns nil if new work was successfully staged, or a sentinel error for graceful exits.
 func runOneEpicPlanning(
@@ -510,7 +513,14 @@ func runOneEpicPlanning(
 		}
 	}
 
-	// --- Phase A: plan one epic via create-epics-and-stories ---
+	// --- Phase A: append one new epic via targeted RunWithPrompt ---
+	// NOTE: We do NOT use the BMAD create-epics-and-stories command here.
+	// That workflow is designed for initial project planning — it re-extracts ALL
+	// requirements from the PRD and regenerates the entire epics document from scratch.
+	// For incremental planning we need a targeted RunWithPrompt that:
+	//   1. Reads the prime directive, existing epics, retros, and sprint-status for context
+	//   2. Appends exactly ONE new epic in BMAD format without touching existing content
+	// Phase B (sprint-planning) is still the real BMAD command for updating sprint-status.yaml.
 	epicCtx := planner.EpicPlanningContext{
 		PrimeDirective: pdContent,
 		NextEpicNum:    nextEpicNum,
@@ -519,15 +529,15 @@ func runOneEpicPlanning(
 		CompletedEpics: completedEpics,
 		StatusFilePath: statusPath,
 	}
-	epicContext := planner.BuildEpicContext(epicCtx)
+	epicPrompt := planner.BuildEpicPlanningPrompt(epicCtx)
 	epicModel := c.String("model")
 	if epicModel == "" {
-		epicModel = defaultModelForAgentType(agentType, "create-epics-and-stories")
+		epicModel = defaultModelForAgentType(agentType, "plan-epic")
 	}
 
-	pterm.Info.Printf("Phase A: create-epics-and-stories (Epic %d)\n", nextEpicNum)
-	if err := r.RunPhaseWithContext(epicContext, "create-epics-and-stories", epicModel); err != nil {
-		pterm.Error.Printf("create-epics-and-stories failed: %v\n", err)
+	pterm.Info.Printf("Phase A: appending Epic %d to epics document\n", nextEpicNum)
+	if err := r.RunWithPrompt(epicPrompt, "plan-epic", epicModel); err != nil {
+		pterm.Error.Printf("epic planning failed: %v\n", err)
 		return err
 	}
 
@@ -647,7 +657,7 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "sonnet"
 		// Epic planning uses the most capable model: creating good epics saves
 		// many dev cycles later.
-		case "create-epics-and-stories", "sprint-planning":
+		case "plan-epic", "sprint-planning":
 			return "opus"
 		default:
 			return "sonnet"
@@ -660,7 +670,7 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "gemini-3-flash"
 		case "code-review", "retrospective":
 			return "gemini-3-pro"
-		case "create-epics-and-stories", "sprint-planning":
+		case "plan-epic", "sprint-planning":
 			return "gemini-3-pro"
 		default:
 			return "gemini-3-pro"
@@ -673,7 +683,7 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "composer-1.5"
 		case "code-review", "retrospective":
 			return "gemini-3-flash"
-		case "create-epics-and-stories", "sprint-planning":
+		case "plan-epic", "sprint-planning":
 			return "claude-4.6-sonnet-medium"
 		default:
 			return "composer-1.5"
