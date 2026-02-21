@@ -271,7 +271,7 @@ func BuildFeatureProposalPrompt(ctx EpicPlanningContext) string {
 	sb.WriteString("## Proposed Solution\n\n")
 	sb.WriteString("(High-level description of what will be built and how it fits the architecture)\n\n")
 	sb.WriteString("## Key Capabilities\n\n")
-	sb.WriteString("- (3–6 concrete capabilities or behaviours this feature delivers)\n\n")
+	sb.WriteString("- (3–6 concrete capabilities or behaviors this feature delivers)\n\n")
 	sb.WriteString("## Why This Epic Now\n\n")
 	sb.WriteString("(Why is this the right next step? Reference the prime directive and any retro findings.)\n\n")
 	sb.WriteString("## Suggested Epic Title\n\n")
