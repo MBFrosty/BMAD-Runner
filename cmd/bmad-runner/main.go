@@ -543,7 +543,23 @@ func runOneEpicPlanning(
 		}
 	}
 
-	// --- correct-course: plan one new epic and update sprint-status + epics doc ---
+	epicModel := c.String("model")
+	if epicModel == "" {
+		epicModel = defaultModelForAgentType(agentType, "correct-course")
+	}
+
+	// --- Feature Scout: propose one concrete feature before invoking correct-course ---
+	//
+	// The Feature Scout runs as a separate agent step. It reads all project context
+	// (PRD, architecture, existing epics, retrospectives, prime directive) and produces
+	// a concrete feature brief written to a known output file.
+	//
+	// Separating feature ideation from epic planning lets correct-course focus on what
+	// it is designed to do — decompose a stated feature into BMAD stories — rather than
+	// having to simultaneously decide what to build AND plan it.
+	//
+	// If the scout fails or produces no output we fall back to the generic correct-course
+	// trigger (prime directive only), so the overall flow remains resilient.
 	epicCtx := planner.EpicPlanningContext{
 		PrimeDirective: pdContent,
 		NextEpicNum:    nextEpicNum,
@@ -551,12 +567,30 @@ func runOneEpicPlanning(
 		RetroFilePaths: retroFiles,
 		CompletedEpics: completedEpics,
 		StatusFilePath: statusPath,
+		ProjectRoot:    projectRoot,
 	}
+
+	proposalPath := planner.FeatureProposalOutputPath(projectRoot, nextEpicNum)
+	featureScoutPrompt := planner.BuildFeatureProposalPrompt(epicCtx)
+
+	pterm.DefaultSection.Printf("Running Feature Scout to propose Epic %d", nextEpicNum)
+	scoutErr := r.RunWithPrompt(featureScoutPrompt, "feature-scout", epicModel)
+	if scoutErr != nil {
+		pterm.Warning.Printf("Feature Scout failed (%v) — falling back to prime directive only.\n", scoutErr)
+	} else {
+		proposal, readErr := planner.ReadFeatureProposal(proposalPath)
+		if readErr != nil {
+			pterm.Warning.Printf("Could not read feature proposal (%v) — falling back to prime directive only.\n", readErr)
+		} else if proposal == "" {
+			pterm.Warning.Println("Feature Scout produced no proposal — falling back to prime directive only.")
+		} else {
+			pterm.Success.Printf("Feature Scout produced a proposal for Epic %d.\n", nextEpicNum)
+			epicCtx.FeatureProposal = proposal
+		}
+	}
+
+	// --- correct-course: plan one new epic and update sprint-status + epics doc ---
 	correctCourseContext := planner.BuildCorrectCourseContext(epicCtx)
-	epicModel := c.String("model")
-	if epicModel == "" {
-		epicModel = defaultModelForAgentType(agentType, "correct-course")
-	}
 
 	pterm.Info.Printf("Running correct-course to plan Epic %d\n", nextEpicNum)
 	if err := r.RunPhaseWithContext(correctCourseContext, "correct-course", epicModel); err != nil {

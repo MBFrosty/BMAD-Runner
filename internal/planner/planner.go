@@ -168,6 +168,125 @@ type EpicPlanningContext struct {
 
 	// StatusFilePath is the path to sprint-status.yaml.
 	StatusFilePath string
+
+	// ProjectRoot is the absolute path to the project root directory.
+	// Used by BuildFeatureProposalPrompt to construct the proposal output path.
+	ProjectRoot string
+
+	// FeatureProposal is the output of the Feature Scout step (may be empty).
+	// When non-empty, it is used as the concrete change trigger for correct-course,
+	// replacing the generic "all work complete, plan Epic N" trigger.
+	FeatureProposal string
+}
+
+// FeatureProposalOutputPath returns the standard path for the Feature Scout output file.
+// The file is written by the agent during the feature scout step and read back by the runner.
+func FeatureProposalOutputPath(projectRoot string, epicNum int) string {
+	return filepath.Join(projectRoot, "_bmad-output", fmt.Sprintf("feature-proposal-epic-%d.md", epicNum))
+}
+
+// ReadFeatureProposal reads the Feature Scout output file and returns its content.
+// Returns empty string if the file does not exist (no proposal generated).
+func ReadFeatureProposal(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading feature proposal: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// BuildFeatureProposalPrompt returns a self-contained agent prompt for the Feature Scout step.
+//
+// The Feature Scout runs BEFORE correct-course. Its job is to analyze the project's
+// current state (what has been built, what the prime directive calls for, lessons from
+// retrospectives) and produce a concrete feature brief for the next epic.
+//
+// By separating feature ideation from epic planning we give correct-course a precise
+// change trigger — a specific named feature with a problem statement and scope — rather
+// than asking it to simultaneously decide what to build AND plan how to build it.
+//
+// The scout writes its proposal to a known file path that the runner reads back and
+// injects into the correct-course context.
+func BuildFeatureProposalPrompt(ctx EpicPlanningContext) string {
+	var sb strings.Builder
+
+	outputPath := FeatureProposalOutputPath(ctx.ProjectRoot, ctx.NextEpicNum)
+
+	sb.WriteString("# Feature Scout — Autonomous Epic Proposal\n\n")
+	sb.WriteString("You are a product strategist performing a project analysis to propose the single most valuable ")
+	sb.WriteString(fmt.Sprintf("next feature to build as **Epic %d**.\n\n", ctx.NextEpicNum))
+
+	sb.WriteString("## Step 1 — Read the Project Context\n\n")
+	sb.WriteString("Read the following files in full before forming any opinions:\n\n")
+
+	if ctx.PrimeDirective != "" {
+		sb.WriteString("### Prime Directive\n\n")
+		sb.WriteString("The prime directive below is the strategic compass for this project. ")
+		sb.WriteString("Your proposal MUST align with it.\n\n")
+		sb.WriteString(ctx.PrimeDirective)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("### Files to Read\n\n")
+	if ctx.EpicsFilePath != "" {
+		sb.WriteString(fmt.Sprintf("- **Existing Epics**: `%s`\n", ctx.EpicsFilePath))
+		sb.WriteString("  Understand what has already been planned/built so you don't propose a duplicate.\n")
+	}
+	if len(ctx.RetroFilePaths) > 0 {
+		sb.WriteString("- **Recent Retrospective(s)**:\n")
+		for _, p := range ctx.RetroFilePaths {
+			sb.WriteString(fmt.Sprintf("  - `%s`\n", p))
+		}
+		sb.WriteString("  Apply lessons learned and any next-epic recommendations from the team.\n")
+	}
+	sb.WriteString("- **PRD and Architecture**: Search `_bmad-output/planning-artifacts/` for the PRD, architecture, and UX documents.\n")
+	sb.WriteString("  Understand the product vision, technical constraints, and existing design.\n\n")
+
+	if len(ctx.CompletedEpics) > 0 {
+		sb.WriteString(fmt.Sprintf("- Already completed epics: %s\n\n", strings.Join(ctx.CompletedEpics, ", ")))
+	}
+
+	sb.WriteString("## Step 2 — Select One Feature to Propose\n\n")
+	sb.WriteString("After reading the above, choose **one** feature for Epic ")
+	sb.WriteString(fmt.Sprintf("%d", ctx.NextEpicNum))
+	sb.WriteString(". Use these criteria:\n\n")
+	sb.WriteString("- Directly advances the prime directive's goals\n")
+	sb.WriteString("- Provides concrete value to users (not purely internal/technical)\n")
+	sb.WriteString("- Fits naturally within the existing architecture\n")
+	sb.WriteString("- Is not a duplicate of any already-planned or completed epic\n")
+	sb.WriteString("- Applies lessons from retrospectives where relevant\n\n")
+
+	sb.WriteString("## Step 3 — Write the Feature Proposal File\n\n")
+	sb.WriteString(fmt.Sprintf("Write your proposal to exactly this path: `%s`\n\n", outputPath))
+	sb.WriteString("Use this exact markdown structure:\n\n")
+	sb.WriteString("```markdown\n")
+	sb.WriteString(fmt.Sprintf("# Epic %d Feature Proposal\n\n", ctx.NextEpicNum))
+	sb.WriteString("## Feature Name\n\n")
+	sb.WriteString("(A short, descriptive name for the feature)\n\n")
+	sb.WriteString("## Problem Statement\n\n")
+	sb.WriteString("(What gap or pain point does this address? Who benefits and how?)\n\n")
+	sb.WriteString("## Proposed Solution\n\n")
+	sb.WriteString("(High-level description of what will be built and how it fits the architecture)\n\n")
+	sb.WriteString("## Key Capabilities\n\n")
+	sb.WriteString("- (3–6 concrete capabilities or behaviours this feature delivers)\n\n")
+	sb.WriteString("## Why This Epic Now\n\n")
+	sb.WriteString("(Why is this the right next step? Reference the prime directive and any retro findings.)\n\n")
+	sb.WriteString("## Suggested Epic Title\n\n")
+	sb.WriteString("(A concise title suitable for use in epics.md and sprint-status.yaml)\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Constraints\n\n")
+	sb.WriteString("- Propose exactly ONE feature — do not list alternatives\n")
+	sb.WriteString("- Do NOT modify sprint-status.yaml, epics.md, or any other project file\n")
+	sb.WriteString("- Your only output file is the proposal at the path above\n")
+	sb.WriteString("- After writing the file, respond with: `Feature proposal complete for Epic ")
+	sb.WriteString(fmt.Sprintf("%d", ctx.NextEpicNum))
+	sb.WriteString("`\n")
+
+	return sb.String()
 }
 
 // BuildCorrectCourseContext returns a context preamble to prepend to the BMAD
@@ -194,20 +313,46 @@ func BuildCorrectCourseContext(ctx EpicPlanningContext) string {
 	// --- Change trigger ---
 	// correct-course Step 1 asks for the change trigger. We provide it here so
 	// the workflow doesn't halt waiting for user input.
+	//
+	// When a Feature Scout proposal is available we use it as the precise change
+	// trigger so correct-course has a concrete feature brief to plan against.
+	// Without it we fall back to the generic "all work complete, plan Epic N" trigger.
 	sb.WriteString("## Change Trigger (Required by Correct Course Step 1)\n\n")
-	if ctx.NextEpicNum > 1 && len(ctx.CompletedEpics) > 0 {
+	if ctx.FeatureProposal != "" {
+		// Feature Scout ran successfully — use its output as the authoritative trigger.
+		if ctx.NextEpicNum > 1 && len(ctx.CompletedEpics) > 0 {
+			sb.WriteString(fmt.Sprintf(
+				"All planned work is complete (%s are done). ",
+				strings.Join(ctx.CompletedEpics, ", "),
+			))
+		} else {
+			sb.WriteString("All currently planned work is complete. ")
+		}
 		sb.WriteString(fmt.Sprintf(
-			"All planned work is complete (%s are done). ",
-			strings.Join(ctx.CompletedEpics, ", "),
+			"A Feature Scout analysis has identified the following feature to build as **Epic %d**:\n\n",
+			ctx.NextEpicNum,
 		))
+		sb.WriteString("---\n\n")
+		sb.WriteString(ctx.FeatureProposal)
+		sb.WriteString("\n\n---\n\n")
+		sb.WriteString("Use the feature proposal above as your precise change trigger and planning scope. ")
+		sb.WriteString("This is proactive forward planning, not a bug fix or mid-sprint pivot.\n\n")
 	} else {
-		sb.WriteString("All currently planned work is complete. ")
+		// No Feature Scout output — fall back to generic trigger guided by prime directive.
+		if ctx.NextEpicNum > 1 && len(ctx.CompletedEpics) > 0 {
+			sb.WriteString(fmt.Sprintf(
+				"All planned work is complete (%s are done). ",
+				strings.Join(ctx.CompletedEpics, ", "),
+			))
+		} else {
+			sb.WriteString("All currently planned work is complete. ")
+		}
+		sb.WriteString(fmt.Sprintf(
+			"We need to plan and add **Epic %d** — the next phase of development.\n\n",
+			ctx.NextEpicNum,
+		))
+		sb.WriteString("This is proactive forward planning, not a bug fix or mid-sprint pivot.\n\n")
 	}
-	sb.WriteString(fmt.Sprintf(
-		"We need to plan and add **Epic %d** — the next phase of development.\n\n",
-		ctx.NextEpicNum,
-	))
-	sb.WriteString("This is proactive forward planning, not a bug fix or mid-sprint pivot.\n\n")
 
 	// --- Pre-flight: extra files to read ---
 	// correct-course Step 0.5 loads standard docs (PRD, architecture, UX).
