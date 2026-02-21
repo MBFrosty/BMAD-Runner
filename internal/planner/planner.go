@@ -79,6 +79,8 @@ is complete. Edit this file to align the AI's planning with your project goals.
 func EnsurePrimeDirective(path string) (bool, error) {
 	if _, err := os.Stat(path); err == nil {
 		return false, nil // already exists
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("checking prime directive: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, fmt.Errorf("creating prime directive directory: %w", err)
