@@ -36,9 +36,6 @@ const statusTruncate = 60
 // cordonBoxWidth is the interior width of the agent output box (fits ~80-char terminals).
 const cordonBoxWidth = 48
 
-// runnerChars cycles for the marquee animation around the box border.
-var runnerChars = []rune{'▸', '▹', '▷', '▸'}
-
 const (
 	barWidth  = 20
 	blockSize = 3
@@ -46,10 +43,26 @@ const (
 
 var brailleChars = []rune{'⣾', '⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽'}
 
+// braille2x2Frame holds the two rows of a 2×2 braille block for PhaseDisplay.
+type braille2x2Frame struct {
+	top, bottom string
+}
+
+// generateBraille2x2Frames produces frames for a 2×2 braille block (no bounce bar).
+// Each frame has top and bottom rows that cycle in sync for a spinning effect.
+func generateBraille2x2Frames() []braille2x2Frame {
+	frames := make([]braille2x2Frame, 0, 8)
+	for i := 0; i < 8; i++ {
+		top := string(brailleChars[i%8]) + string(brailleChars[(i+1)%8])
+		bottom := string(brailleChars[(i+2)%8]) + string(brailleChars[(i+3)%8])
+		frames = append(frames, braille2x2Frame{top: top, bottom: bottom})
+	}
+	return frames
+}
+
 // generateBounceFrames produces frames for a bouncing block across a bar,
-// with a synchronized braille spinner. Each frame: "⣾  ▓▓▓░░░░...   ".
+// with a synchronized braille spinner. Used by NewPhaseSpinner for CI mode.
 func generateBounceFrames() []string {
-	// Bounce: 0→17, then 16→0, repeat
 	positions := make([]int, 0, 36)
 	for i := 0; i <= barWidth-blockSize; i++ {
 		positions = append(positions, i)
@@ -74,22 +87,34 @@ func generateBounceFrames() []string {
 	return frames
 }
 
-// NewPhaseSpinner returns a SpinnerPrinter configured with the bounce animation
-// and 80ms delay. Call .Start(label) / .Success() / .Fail() as usual.
+// generateBrailleOnlyFrames produces simple braille-only frames for CI spinner.
+func generateBrailleOnlyFrames() []string {
+	frames := make([]string, 0, 8)
+	for i := 0; i < 8; i++ {
+		frames = append(frames, string(brailleChars[i%8])+string(brailleChars[(i+1)%8]))
+	}
+	return frames
+}
+
+// NewPhaseSpinner returns a SpinnerPrinter configured with braille-only animation
+// for CI/non-live mode. Call .Start(label) / .Success() / .Fail() as usual.
 func NewPhaseSpinner() *pterm.SpinnerPrinter {
-	frames := generateBounceFrames()
+	frames := generateBrailleOnlyFrames()
 	return pterm.DefaultSpinner.
 		WithSequence(frames...).
 		WithDelay(80 * time.Millisecond).
 		WithShowTimer(false)
 }
 
-// PhaseDisplay renders the bounce animation and a rolling log preview in-place
-// using atomicgo/cursor Area (no terminal scrolling). Use Tick to advance the frame
-// and refresh log lines; call Success or Fail when the phase ends.
+// rotateText is the 12-character string that rotates around the box perimeter.
+const rotateText = "agent output "
+
+// PhaseDisplay renders a 2×2 braille spinner and rolling log preview in-place
+// using atomicgo/cursor Area. "agent output" rotates around the heavy box perimeter.
+// Use Tick to advance the frame; call Success or Fail when the phase ends.
 type PhaseDisplay struct {
 	area         cursor.Area
-	frames       []string
+	brailleFrames []braille2x2Frame
 	phase        string
 	frameIdx     int
 	logLineCount int
@@ -98,66 +123,91 @@ type PhaseDisplay struct {
 }
 
 // NewPhaseDisplay starts an in-place live area for the given phase.
-// logLines controls how many preview lines are shown below the animation.
+// logLines controls how many preview lines are shown in the box.
 func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
 	return &PhaseDisplay{
-		area:         cursor.NewArea(),
-		frames:       generateBounceFrames(),
-		phase:        phase,
-		logLineCount: logLines,
-		active:       true,
+		area:          cursor.NewArea(),
+		brailleFrames:  generateBraille2x2Frames(),
+		phase:          phase,
+		logLineCount:   logLines,
+		active:         true,
 	}
 }
 
 // Tick advances the animation by one frame and redraws with the provided log lines.
-// Serialized to prevent overlapping updates. Output is cordoned in a fixed box with
-// a runner that travels the full perimeter: top → right → bottom → left.
+// Uses heavy box, 2×2 braille left of box, and "agent output" rotating around the perimeter.
 func (d *PhaseDisplay) Tick(logLines []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.active {
 		return
 	}
-	frame := d.frames[d.frameIdx%len(d.frames)]
+	bf := d.brailleFrames[d.frameIdx%len(d.brailleFrames)]
 	d.frameIdx++
 
-	// Truncate content to box width (runewidth) so lines never wrap
 	truncate := func(s string) string { return runewidth.Truncate(s, cordonBoxWidth, "…") }
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s  Executing %s...\n", frame, d.phase))
-
-	// Box layout: all lines use same interior width for perfect alignment
 	interiorWidth := cordonBoxWidth + 2
-	topLabel := " agent output "
-	topLabelWidth := runewidth.StringWidth(topLabel)
-	topDashes := interiorWidth - topLabelWidth
-	if topDashes < 0 {
-		topDashes = 0
+	topLen := interiorWidth - 2
+	rightLen := d.logLineCount
+	bottomLen := interiorWidth - 2
+	leftLen := d.logLineCount
+	perimeter := topLen + 1 + rightLen + 1 + bottomLen + 1 + leftLen + 1
+	offset := (d.frameIdx / 2) % perimeter
+
+	charAt := func(p int) rune {
+		idx := (p - offset + 12*perimeter) % perimeter
+		return rune(rotateText[idx%12])
 	}
 
-	// Perimeter: top → right edge → bottom → left edge (clockwise)
-	perimeter := topDashes + d.logLineCount + interiorWidth + d.logLineCount
-	pos := (d.frameIdx / 2) % perimeter
-	runner := runnerChars[d.frameIdx%len(runnerChars)]
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("  Executing %s...\n\n", d.phase))
 
-	// Segment 0: top (L→R)
-	topLine := "  ╭" + topLabel
-	if pos < topDashes {
-		runnerPos := pos
-		topLine += strings.Repeat("─", runnerPos) + string(runner) +
-			strings.Repeat("─", topDashes-1-runnerPos)
+	// Braille prefix for each line (alternate top/bottom row of 2×2 block)
+	brailleRow := func(lineIdx int) string {
+		if lineIdx%2 == 0 {
+			return bf.top
+		}
+		return bf.bottom
+	}
+
+	// Segment boundaries (clockwise: top → top-right corner → right → bottom-right → bottom → bottom-left → left → top-left)
+	topRightCorner := topLen
+	rightStart := topLen + 1
+	rightEnd := topLen + rightLen
+	bottomRightCorner := rightEnd + 1
+	bottomStart := bottomRightCorner + 1
+	bottomEnd := bottomStart + bottomLen - 1
+	bottomLeftCorner := bottomEnd + 1
+	leftStart := bottomLeftCorner + 1
+	leftEnd := leftStart + leftLen - 1
+	topLeftCorner := leftEnd + 1
+
+	// Top line: ┏ + top-left corner + top segment + top-right corner + ┓
+	topLine := "┏"
+	cTopLeft := charAt(topLeftCorner)
+	if cTopLeft == ' ' {
+		topLine += "━"
 	} else {
-		topLine += strings.Repeat("─", topDashes)
+		topLine += string(cTopLeft)
 	}
-	sb.WriteString(topLine + "╮\n")
+	for i := 0; i < topLen; i++ {
+		c := charAt(i)
+		if c == ' ' {
+			topLine += "━"
+		} else {
+			topLine += string(c)
+		}
+	}
+	cTopRight := charAt(topRightCorner)
+	if cTopRight == ' ' {
+		topLine += "━┓"
+	} else {
+		topLine += string(cTopRight) + "┓"
+	}
+	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleRow(0), topLine))
 
-	// Content lines: runner on right edge (segment 1) or left edge (segment 3)
-	rightSegStart := topDashes
-	rightSegEnd := topDashes + d.logLineCount
-	leftSegStart := topDashes + d.logLineCount + interiorWidth
-	leftSegEnd := perimeter
-
+	// Content lines with right edge chars
 	for i := 0; i < d.logLineCount; i++ {
 		var content string
 		if i < len(logLines) {
@@ -167,36 +217,48 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 		if pad < 0 {
 			pad = 0
 		}
-		inner := " " + content + strings.Repeat(" ", pad) + " "
 
-		// Right edge: pos in [rightSegStart, rightSegEnd), runner on line (pos - rightSegStart)
-		// Left edge: pos in [leftSegStart, leftSegEnd), runner on line (pos - leftSegStart), B→T so invert
-		rightRunner := pos >= rightSegStart && pos < rightSegEnd && (pos-rightSegStart) == i
-		leftRunner := pos >= leftSegStart && pos < leftSegEnd && (leftSegEnd-1-pos) == i
+		pRight := rightStart + i
+		pLeft := leftEnd - i
+		rightCh := charAt(pRight)
+		leftCh := charAt(pLeft)
+		leftStr := " "
+		if leftCh != ' ' {
+			leftStr = string(leftCh)
+		}
+		rightStr := " "
+		if rightCh != ' ' {
+			rightStr = string(rightCh)
+		}
+		inner := leftStr + content + strings.Repeat(" ", pad) + rightStr
 
-		leftChar := "│"
-		if leftRunner {
-			leftChar = string(runner)
-		}
-		rightChar := "│"
-		if rightRunner {
-			rightChar = string(runner)
-		}
-		sb.WriteString("  " + leftChar + inner + rightChar + "\n")
+		sb.WriteString(fmt.Sprintf("  %s   ┃%s┃\n", brailleRow(i+1), inner))
 	}
 
-	// Segment 2: bottom (R→L)
-	bottomLine := "  ╰"
-	if pos >= rightSegEnd && pos < leftSegStart {
-		runnerPos := pos - rightSegEnd
-		// R→L: rightmost first, so actual pos = interiorWidth - 1 - runnerPos
-		actualPos := interiorWidth - 1 - runnerPos
-		bottomLine += strings.Repeat("─", actualPos) + string(runner) +
-			strings.Repeat("─", interiorWidth-1-actualPos)
+	// Bottom line: ┗ + bottomLeftCorner + bottom segment (L→R) + bottomRightCorner + ┛
+	bottomLine := "┗"
+	c := charAt(bottomLeftCorner)
+	if c == ' ' {
+		bottomLine += "━"
 	} else {
-		bottomLine += strings.Repeat("─", interiorWidth)
+		bottomLine += string(c)
 	}
-	sb.WriteString(bottomLine + "╯\n")
+	for i := bottomLen - 1; i >= 0; i-- {
+		p := bottomStart + i
+		c := charAt(p)
+		if c == ' ' {
+			bottomLine += "━"
+		} else {
+			bottomLine += string(c)
+		}
+	}
+	c = charAt(bottomRightCorner)
+	if c == ' ' {
+		bottomLine += "━┛"
+	} else {
+		bottomLine += string(c) + "┛"
+	}
+	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleRow(d.logLineCount+1), bottomLine))
 	d.area.Update(sb.String())
 }
 
