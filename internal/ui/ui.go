@@ -43,21 +43,59 @@ const (
 
 var brailleChars = []rune{'⣾', '⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽'}
 
-// braille2x2Frame holds the two rows of a 2×2 braille block for PhaseDisplay.
-type braille2x2Frame struct {
-	top, bottom string
+// Light braille for trail fade (1–4 dots per cell)
+var lightBraille = []rune{'⠁', '⠂', '⠃', '⠄', '⠅', '⠆', '⠇'}
+
+func mod(a, b int) int {
+	r := a % b
+	if r < 0 {
+		r += b
+	}
+	return r
 }
 
-// generateBraille2x2Frames produces frames for a 2×2 braille block (no bounce bar).
-// Each frame has top and bottom rows that cycle in sync for a spinning effect.
-func generateBraille2x2Frames() []braille2x2Frame {
-	frames := make([]braille2x2Frame, 0, 8)
-	for i := 0; i < 8; i++ {
-		top := string(brailleChars[i%8]) + string(brailleChars[(i+1)%8])
-		bottom := string(brailleChars[(i+2)%8]) + string(brailleChars[(i+3)%8])
-		frames = append(frames, braille2x2Frame{top: top, bottom: bottom})
+// rainDropChar returns the braille for one rain stream: bright head, fading trail.
+// All streams use the same logic — head (full braille), trail (light braille).
+func rainDropChar(slowFrame, lineIdx, totalLines, phase int) rune {
+	headAt := mod(slowFrame+phase, totalLines)
+	trail1At := mod(slowFrame+phase-1, totalLines)
+	trail2At := mod(slowFrame+phase-2, totalLines)
+	trail3At := mod(slowFrame+phase-3, totalLines)
+	switch lineIdx {
+	case headAt:
+		return brailleChars[slowFrame%8]
+	case trail1At:
+		return lightBraille[(slowFrame+1)%len(lightBraille)]
+	case trail2At:
+		return lightBraille[(slowFrame+2)%len(lightBraille)]
+	case trail3At:
+		return lightBraille[(slowFrame+3)%len(lightBraille)]
+	default:
+		return 0
 	}
-	return frames
+}
+
+// brailleStripLine returns one line of the Matrix rain strip (4 columns).
+// All streams operate the same: bright head + fading trail, staggered phases.
+func brailleStripLine(frameIdx, lineIdx, totalLines int) string {
+	slowFrame := frameIdx / 2
+	var buf [4]rune
+	// 2 streams per column, 8 total — phases staggered for dense rain
+	phases := []int{0, totalLines/8, totalLines/4, 3*totalLines/8, totalLines/2, 5*totalLines/8, 3*totalLines/4, 7*totalLines/8}
+	for col := 0; col < 4; col++ {
+		var r rune
+		for _, phase := range phases[col*2 : col*2+2] {
+			if c := rainDropChar(slowFrame, lineIdx, totalLines, phase); c != 0 {
+				r = c
+				break
+			}
+		}
+		if r == 0 {
+			r = ' '
+		}
+		buf[col] = r
+	}
+	return string(buf[:])
 }
 
 // generateBounceFrames produces frames for a bouncing block across a bar,
@@ -109,12 +147,11 @@ func NewPhaseSpinner() *pterm.SpinnerPrinter {
 // rotateText is the 12-character string that rotates around the box perimeter.
 const rotateText = "agent output "
 
-// PhaseDisplay renders a 2×2 braille spinner and rolling log preview in-place
-// using atomicgo/cursor Area. "agent output" rotates around the heavy box perimeter.
-// Use Tick to advance the frame; call Success or Fail when the phase ends.
+// PhaseDisplay renders a braille strip and rolling log preview in-place
+// using atomicgo/cursor Area. The braille strip animates as one cohesive unit.
+// "agent output" rotates around the heavy box perimeter.
 type PhaseDisplay struct {
 	area         cursor.Area
-	brailleFrames []braille2x2Frame
 	phase        string
 	frameIdx     int
 	logLineCount int
@@ -126,11 +163,10 @@ type PhaseDisplay struct {
 // logLines controls how many preview lines are shown in the box.
 func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
 	return &PhaseDisplay{
-		area:          cursor.NewArea(),
-		brailleFrames:  generateBraille2x2Frames(),
-		phase:          phase,
-		logLineCount:   logLines,
-		active:         true,
+		area:         cursor.NewArea(),
+		phase:        phase,
+		logLineCount: logLines,
+		active:       true,
 	}
 }
 
@@ -142,7 +178,6 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	if !d.active {
 		return
 	}
-	bf := d.brailleFrames[d.frameIdx%len(d.brailleFrames)]
 	d.frameIdx++
 
 	truncate := func(s string) string { return runewidth.Truncate(s, cordonBoxWidth, "…") }
@@ -156,7 +191,6 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	offset := (d.frameIdx / 2) % perimeter
 
 	// Only 12 consecutive positions show "agent output"; rest show dash.
-	// relPos is the position relative to the sliding window start.
 	charAt := func(p int) (r rune, ok bool) {
 		relPos := (p - offset + perimeter) % perimeter
 		if relPos < 0 {
@@ -171,13 +205,8 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("  Executing %s...\n\n", d.phase))
 
-	// Braille prefix for each line (alternate top/bottom row of 2×2 block)
-	brailleRow := func(lineIdx int) string {
-		if lineIdx%2 == 0 {
-			return bf.top
-		}
-		return bf.bottom
-	}
+	// Braille strip: one cohesive animation — diagonal pattern flows through all lines
+	totalLines := 1 + d.logLineCount + 1
 
 	// Segment boundaries (clockwise: top → top-right corner → right → bottom-right → bottom → bottom-left → left → top-left)
 	topRightCorner := topLen
@@ -206,7 +235,7 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	} else {
 		topLine += "━┓"
 	}
-	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleRow(0), topLine))
+	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleStripLine(d.frameIdx, 0, totalLines), topLine))
 
 	// Content lines: keep log readable — no rotating chars in content area
 	for i := 0; i < d.logLineCount; i++ {
@@ -219,7 +248,7 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 			pad = 0
 		}
 		inner := " " + content + strings.Repeat(" ", pad) + " "
-		sb.WriteString(fmt.Sprintf("  %s   ┃%s┃\n", brailleRow(i+1), inner))
+		sb.WriteString(fmt.Sprintf("  %s   ┃%s┃\n", brailleStripLine(d.frameIdx, 1+i, totalLines), inner))
 	}
 
 	// Bottom line: ┗ + bottomLeftCorner + bottom segment (L→R) + bottomRightCorner + ┛
@@ -242,7 +271,7 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	} else {
 		bottomLine += "━┛"
 	}
-	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleRow(d.logLineCount+1), bottomLine))
+	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleStripLine(d.frameIdx, totalLines-1, totalLines), bottomLine))
 	d.area.Update(sb.String())
 }
 
