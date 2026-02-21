@@ -126,14 +126,25 @@ func (s *SprintStatus) EpicGroups() []EpicGroup {
 	return groups
 }
 
+// storyStarted returns true if the story status indicates work has begun (beyond backlog/drafted).
+func storyStarted(status string) bool {
+	switch status {
+	case "backlog", "drafted":
+		return false
+	default:
+		return true
+	}
+}
+
 // NextWork returns the next action to take: "story", "retrospective", or "" if all done.
 // epicKey is the epic identifier for display.
 // storyKey is the first pending story key when action is "story"; empty for retrospective.
 // Processes epics in document order: runs retrospective for completed epics before moving to the next epic's stories.
+// For "optional" retros: runs when epic is done and no story has started on the next epic; skips otherwise.
 func (s *SprintStatus) NextWork() (action, epicKey, storyKey string, found bool) {
 	groups := s.EpicGroups()
 
-	for _, g := range groups {
+	for i, g := range groups {
 		allStoriesDone := true
 		var firstPendingStory string
 		for _, st := range g.Stories {
@@ -148,6 +159,21 @@ func (s *SprintStatus) NextWork() (action, epicKey, storyKey string, found bool)
 		if allStoriesDone && g.RetroKey != "" {
 			retroComplete := g.RetroStatus == "done" || g.RetroStatus == "completed"
 			if !retroComplete {
+				// "optional" = run only when no story has started on the next epic; skip if we've moved on
+				if g.RetroStatus == "optional" {
+					nextEpicStarted := false
+					if i+1 < len(groups) {
+						for _, st := range groups[i+1].Stories {
+							if storyStarted(st.Value) {
+								nextEpicStarted = true
+								break
+							}
+						}
+					}
+					if nextEpicStarted {
+						continue
+					}
+				}
 				return "retrospective", g.EpicKey, "", true
 			}
 		}

@@ -144,12 +144,11 @@ func NewPhaseSpinner() *pterm.SpinnerPrinter {
 		WithShowTimer(false)
 }
 
-// rotateText is the 12-character string that rotates around the box perimeter.
-const rotateText = "agent output "
+// agentOutputLabel is the static label in the top border (no line between words).
+const agentOutputLabel = " agent output "
 
-// PhaseDisplay renders a braille strip and rolling log preview in-place
-// using atomicgo/cursor Area. The braille strip animates as one cohesive unit.
-// "agent output" rotates around the heavy box perimeter.
+// PhaseDisplay renders a Matrix rain braille strip and rolling log preview in-place
+// using atomicgo/cursor Area. Heavy box with static "agent output" label.
 type PhaseDisplay struct {
 	area         cursor.Area
 	phase        string
@@ -171,7 +170,7 @@ func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
 }
 
 // Tick advances the animation by one frame and redraws with the provided log lines.
-// Uses heavy box, 2×2 braille left of box, and "agent output" rotating around the perimeter.
+// Uses heavy box with static "agent output" label and Matrix rain braille strip.
 func (d *PhaseDisplay) Tick(logLines []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -184,57 +183,22 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 
 	interiorWidth := cordonBoxWidth + 2
 	topLen := interiorWidth - 2
-	rightLen := d.logLineCount
 	bottomLen := interiorWidth - 2
-	leftLen := d.logLineCount
-	perimeter := topLen + 1 + rightLen + 1 + bottomLen + 1 + leftLen + 1
-	offset := (d.frameIdx / 2) % perimeter
-
-	// Only 12 consecutive positions show "agent output"; rest show dash.
-	charAt := func(p int) (r rune, ok bool) {
-		relPos := (p - offset + perimeter) % perimeter
-		if relPos < 0 {
-			relPos += perimeter
-		}
-		if relPos < 12 {
-			return rune(rotateText[relPos]), true
-		}
-		return 0, false
-	}
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("  Executing %s...\n\n", d.phase))
 
-	// Braille strip: one cohesive animation — diagonal pattern flows through all lines
 	totalLines := 1 + d.logLineCount + 1
 
-	// Segment boundaries (clockwise: top → top-right corner → right → bottom-right → bottom → bottom-left → left → top-left)
-	topRightCorner := topLen
-	bottomRightCorner := topLen + 1 + rightLen + 1
-	bottomStart := bottomRightCorner + 1
-	bottomEnd := bottomStart + bottomLen - 1
-	bottomLeftCorner := bottomEnd + 1
-	topLeftCorner := bottomLeftCorner + 1 + leftLen + 1
-
-	// Top line: ┏ + top-left corner + top segment + top-right corner + ┓
-	topLine := "┏"
-	if c, ok := charAt(topLeftCorner); ok && c != ' ' {
-		topLine += string(c)
-	} else {
-		topLine += "━"
+	// Top line: ┏ + " agent output " centered + dashes + ┓ (no line between words)
+	labelWidth := runewidth.StringWidth(agentOutputLabel)
+	dashTotal := topLen - labelWidth
+	if dashTotal < 0 {
+		dashTotal = 0
 	}
-	for i := 0; i < topLen; i++ {
-		if c, ok := charAt(i); ok && c != ' ' {
-			topLine += string(c)
-		} else {
-			topLine += "━"
-		}
-	}
-	if c, ok := charAt(topRightCorner); ok && c != ' ' {
-		topLine += string(c) + "┓"
-	} else {
-		topLine += "━┓"
-	}
+	leftDashes := dashTotal / 2
+	rightDashes := dashTotal - leftDashes
+	topLine := "┏" + strings.Repeat("━", leftDashes) + agentOutputLabel + strings.Repeat("━", rightDashes) + "┓"
 	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleStripLine(d.frameIdx, 0, totalLines), topLine))
 
 	// Content lines: keep log readable — no rotating chars in content area
@@ -251,26 +215,8 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 		sb.WriteString(fmt.Sprintf("  %s   ┃%s┃\n", brailleStripLine(d.frameIdx, 1+i, totalLines), inner))
 	}
 
-	// Bottom line: ┗ + bottomLeftCorner + bottom segment (L→R) + bottomRightCorner + ┛
-	bottomLine := "┗"
-	if c, ok := charAt(bottomLeftCorner); ok && c != ' ' {
-		bottomLine += string(c)
-	} else {
-		bottomLine += "━"
-	}
-	for i := bottomLen - 1; i >= 0; i-- {
-		p := bottomStart + i
-		if c, ok := charAt(p); ok && c != ' ' {
-			bottomLine += string(c)
-		} else {
-			bottomLine += "━"
-		}
-	}
-	if c, ok := charAt(bottomRightCorner); ok && c != ' ' {
-		bottomLine += string(c) + "┛"
-	} else {
-		bottomLine += "━┛"
-	}
+	// Bottom line: ┗ + dashes + ┛
+	bottomLine := "┗" + strings.Repeat("━", bottomLen) + "┛"
 	sb.WriteString(fmt.Sprintf("  %s   %s\n", brailleStripLine(d.frameIdx, totalLines-1, totalLines), bottomLine))
 	d.area.Update(sb.String())
 }
