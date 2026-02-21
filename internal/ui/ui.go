@@ -33,6 +33,12 @@ func FormatLastLineForStatus(line string) string {
 
 const statusTruncate = 60
 
+// cordonBoxWidth is the interior width of the agent output box (fits ~80-char terminals).
+const cordonBoxWidth = 48
+
+// runnerChars cycles for the marquee animation around the box border.
+var runnerChars = []rune{'▸', '▹', '▷', '▸'}
+
 const (
 	barWidth  = 20
 	blockSize = 3
@@ -103,11 +109,9 @@ func NewPhaseDisplay(phase string, logLines int) *PhaseDisplay {
 	}
 }
 
-// cordonContentWidth is the display width of the agent output content inside the box.
-const cordonContentWidth = statusTruncate
-
 // Tick advances the animation by one frame and redraws with the provided log lines.
-// Serialized to prevent overlapping updates. Output is cordoned in a fixed box.
+// Serialized to prevent overlapping updates. Output is cordoned in a fixed box with
+// a runner that travels the full perimeter: top → right → bottom → left.
 func (d *PhaseDisplay) Tick(logLines []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -116,26 +120,83 @@ func (d *PhaseDisplay) Tick(logLines []string) {
 	}
 	frame := d.frames[d.frameIdx%len(d.frames)]
 	d.frameIdx++
+
+	// Truncate content to box width (runewidth) so lines never wrap
+	truncate := func(s string) string { return runewidth.Truncate(s, cordonBoxWidth, "…") }
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s  Executing %s...\n", frame, d.phase))
-	// Top border
-	dashCount := cordonContentWidth - runewidth.StringWidth("─ agent output ─")
-	if dashCount < 0 {
-		dashCount = 0
+
+	// Box layout: all lines use same interior width for perfect alignment
+	interiorWidth := cordonBoxWidth + 2
+	topLabel := " agent output "
+	topLabelWidth := runewidth.StringWidth(topLabel)
+	topDashes := interiorWidth - topLabelWidth
+	if topDashes < 0 {
+		topDashes = 0
 	}
-	sb.WriteString("  ┌─ agent output ─" + strings.Repeat("─", dashCount) + "┐\n")
+
+	// Perimeter: top → right edge → bottom → left edge (clockwise)
+	perimeter := topDashes + d.logLineCount + interiorWidth + d.logLineCount
+	pos := (d.frameIdx / 2) % perimeter
+	runner := runnerChars[d.frameIdx%len(runnerChars)]
+
+	// Segment 0: top (L→R)
+	topLine := "  ╭" + topLabel
+	if pos < topDashes {
+		runnerPos := pos
+		topLine += strings.Repeat("─", runnerPos) + string(runner) +
+			strings.Repeat("─", topDashes-1-runnerPos)
+	} else {
+		topLine += strings.Repeat("─", topDashes)
+	}
+	sb.WriteString(topLine + "╮\n")
+
+	// Content lines: runner on right edge (segment 1) or left edge (segment 3)
+	rightSegStart := topDashes
+	rightSegEnd := topDashes + d.logLineCount
+	leftSegStart := topDashes + d.logLineCount + interiorWidth
+	leftSegEnd := perimeter
+
 	for i := 0; i < d.logLineCount; i++ {
 		var content string
 		if i < len(logLines) {
-			content = FormatLastLineForStatus(logLines[i])
+			content = truncate(FormatLastLineForStatus(logLines[i]))
 		}
-		pad := cordonContentWidth - runewidth.StringWidth(content)
+		pad := cordonBoxWidth - runewidth.StringWidth(content)
 		if pad < 0 {
 			pad = 0
 		}
-		sb.WriteString("  │ " + content + strings.Repeat(" ", pad) + " │\n")
+		inner := " " + content + strings.Repeat(" ", pad) + " "
+
+		// Right edge: pos in [rightSegStart, rightSegEnd), runner on line (pos - rightSegStart)
+		// Left edge: pos in [leftSegStart, leftSegEnd), runner on line (pos - leftSegStart), B→T so invert
+		rightRunner := pos >= rightSegStart && pos < rightSegEnd && (pos-rightSegStart) == i
+		leftRunner := pos >= leftSegStart && pos < leftSegEnd && (leftSegEnd-1-pos) == i
+
+		leftChar := "│"
+		if leftRunner {
+			leftChar = string(runner)
+		}
+		rightChar := "│"
+		if rightRunner {
+			rightChar = string(runner)
+		}
+		sb.WriteString("  " + leftChar + inner + rightChar + "\n")
 	}
-	sb.WriteString("  └" + strings.Repeat("─", cordonContentWidth+2) + "┘\n")
+
+	// Segment 2: bottom (R→L)
+	bottomLine := "  ╰"
+	if pos >= rightSegEnd && pos < leftSegStart {
+		runnerPos := pos - rightSegEnd
+		// R→L: rightmost first, so actual pos = interiorWidth - 1 - runnerPos
+		actualPos := interiorWidth - 1 - runnerPos
+		bottomLine += strings.Repeat("─", actualPos) + string(runner) +
+			strings.Repeat("─", interiorWidth-1-actualPos)
+	} else {
+		bottomLine += strings.Repeat("─", interiorWidth)
+	}
+	sb.WriteString(bottomLine + "╯\n")
 	d.area.Update(sb.String())
 }
 
