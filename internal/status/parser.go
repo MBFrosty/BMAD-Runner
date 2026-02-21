@@ -150,6 +150,19 @@ func (s *SprintStatus) NextWork() (action, epicKey, storyKey string, found bool)
 	return "", "", "", false
 }
 
+// NextEpicNumber returns the next unused epic number (highest existing number + 1).
+// Returns 1 if no epics are present yet.
+func (s *SprintStatus) NextEpicNumber() int {
+	max := 0
+	for _, g := range s.EpicGroups() {
+		var n int
+		if _, err := fmt.Sscanf(g.EpicKey, "epic-%d", &n); err == nil && n > max {
+			max = n
+		}
+	}
+	return max + 1
+}
+
 // EpicProgress returns (storiesDone, storiesTotal) for the given epic key.
 func (s *SprintStatus) EpicProgress(epicKey string) (done, total int) {
 	for _, g := range s.EpicGroups() {

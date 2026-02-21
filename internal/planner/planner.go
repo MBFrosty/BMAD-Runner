@@ -10,6 +10,9 @@ import (
 // DefaultPrimeDirectivePath is the default location of the prime directive relative to project root.
 const DefaultPrimeDirectivePath = "_bmad-output/prime-directive.md"
 
+// DefaultMaxEpics is the default maximum number of new epics to plan per auto session.
+const DefaultMaxEpics = 5
+
 // defaultPrimeDirective is written when no prime directive exists yet.
 const defaultPrimeDirective = `# Prime Directive
 
@@ -99,129 +102,49 @@ func ReadPrimeDirective(path string) (string, error) {
 }
 
 // IsDefaultPrimeDirective returns true if the content still looks like the unedited default.
-// This is a heuristic — we check for the fill-in placeholder text.
 func IsDefaultPrimeDirective(content string) bool {
 	return strings.Contains(content, "(Fill in your project vision here)") ||
 		strings.Contains(content, "(Describe your next milestone or desired outcome)")
 }
 
-// BuildPrompt creates the yolo-mode prompt for the epic-planning agent phase.
-// primeDirective is the content of the prime directive file (may be empty).
-// projectRoot is the absolute path to the project being planned.
-// maxEpics is the maximum number of new epics to create (typically 5).
-func BuildPrompt(primeDirective, projectRoot string, maxEpics int) string {
+// BuildEpicContext returns a small targeted preamble to prepend to the BMAD
+// create-epics-and-stories command file. It scopes the BMAD workflow to adding
+// ONE incremental epic for an existing in-progress project, starting at nextEpicNum.
+//
+// This is NOT a self-contained prompt — it is a context block prepended before the
+// actual BMAD command content so the BMAD workflow executes with the right scope.
+func BuildEpicContext(primeDirective string, nextEpicNum int) string {
 	var sb strings.Builder
 
-	sb.WriteString("# Automated Epic Planning Task\n\n")
-	sb.WriteString("You are a senior product strategist and technical architect operating in BMAD yolo mode.\n")
-	sb.WriteString("Your task: analyze the current project state and generate new epics + stories to continue development.\n\n")
-	sb.WriteString("## CRITICAL: Operate in #yolo mode\n")
-	sb.WriteString("- Accept ALL suggestions automatically without asking\n")
-	sb.WriteString("- Skip all confirmations, menus, and elicitation steps\n")
-	sb.WriteString("- Proceed autonomously through every step\n")
-	sb.WriteString("- Simulate expert 'yes/continue' responses for any interactive prompts\n\n")
+	sb.WriteString("# Incremental Epic Planning — Context (Read This First)\n\n")
+	sb.WriteString("> **IMPORTANT**: This is an EXISTING in-progress project.\n")
+	sb.WriteString("> You are NOT starting a new project from scratch.\n")
+	sb.WriteString("> The BMAD workflow below is being used to add **one new epic** to an existing project.\n\n")
 
-	sb.WriteString("---\n\n")
-	sb.WriteString("## Prime Directive\n\n")
+	sb.WriteString("## Your Specific Scope\n\n")
+	sb.WriteString(fmt.Sprintf("- Plan **Epic %d only** (the next epic in sequence)\n", nextEpicNum))
+	sb.WriteString("- **Append** this epic to the existing epics document — do NOT overwrite or rewrite existing epics\n")
+	sb.WriteString("- Give this epic **3–7 stories** that are actionable and independently testable\n")
+	sb.WriteString("- Skip strict prerequisite validation steps — use whatever documents already exist in the project\n")
+	sb.WriteString("- If the workflow asks to design all epics, limit yourself to this one new epic only\n\n")
+
 	if primeDirective != "" {
+		sb.WriteString("## Prime Directive (Your Strategic Guide)\n\n")
+		sb.WriteString("Use the following to determine the focus area for this new epic:\n\n")
 		sb.WriteString(primeDirective)
-	} else {
-		sb.WriteString("*No prime directive found. Use your best judgment based on the project context and retrospective insights.*\n")
+		sb.WriteString("\n\n")
 	}
-	sb.WriteString("\n\n---\n\n")
 
-	sb.WriteString("## Your Mission\n\n")
-	sb.WriteString("All currently planned stories have been completed. ")
-	sb.WriteString(fmt.Sprintf("Generate up to %d new epics with stories to continue project development.\n\n", maxEpics))
-
-	sb.WriteString("---\n\n")
-	sb.WriteString("## Execution Steps (follow in order, no skipping)\n\n")
-
-	sb.WriteString("### Step 1: Understand the Current State\n\n")
-	sb.WriteString("Read and analyze these project artifacts (use what exists, skip gracefully if missing):\n\n")
-	sb.WriteString("1. **Sprint status**: `_bmad-output/implementation-artifacts/sprint-status.yaml`\n")
-	sb.WriteString("   - Note all completed epics, their numbers, and the last epic number used\n")
-	sb.WriteString("2. **Existing epics**: any `_bmad-output/planning-artifacts/epic*.md` files\n")
-	sb.WriteString("   - Note what has already been planned and built\n")
-	sb.WriteString("3. **Retrospective notes**: any `_bmad-output/implementation-artifacts/*retro*.md` files\n")
-	sb.WriteString("   - Extract lessons learned, identified gaps, and suggestions for future work\n")
-	sb.WriteString("4. **PRD**: `_bmad-output/planning-artifacts/prd.md` or similar\n")
-	sb.WriteString("   - Note original goals, any unimplemented requirements\n")
-	sb.WriteString("5. **Architecture**: `_bmad-output/planning-artifacts/architecture.md` or similar\n")
-	sb.WriteString("   - Note technical constraints and patterns to follow\n")
-	sb.WriteString("6. **Project context**: any `**/project-context.md` file\n\n")
-
-	sb.WriteString("### Step 2: Determine Next Epic Number\n\n")
-	sb.WriteString("Count the existing epic entries (e.g., `epic-1`, `epic-2`) in sprint-status.yaml.\n")
-	sb.WriteString("New epics will start from N+1 where N is the highest existing epic number.\n\n")
-
-	sb.WriteString("### Step 3: Design New Epics\n\n")
-	sb.WriteString("Based on the prime directive, retrospective insights, and remaining opportunities, design new epics.\n\n")
-	sb.WriteString("**Prioritize these categories (in order):**\n")
+	sb.WriteString("## Focus Priorities (if prime directive does not specify)\n\n")
+	sb.WriteString("Consider these areas in order of impact:\n")
 	sb.WriteString("1. **Hardening** — stability, reliability, error handling, edge cases\n")
-	sb.WriteString("2. **New Features** — user-facing capabilities aligned with the product vision\n")
+	sb.WriteString("2. **New Features** — valuable additions aligned with the product vision\n")
 	sb.WriteString("3. **Technical Debt** — code quality, refactoring, architecture improvements\n")
-	sb.WriteString("4. **Performance** — speed, efficiency, scalability improvements\n")
+	sb.WriteString("4. **Performance** — speed, efficiency, scalability\n")
 	sb.WriteString("5. **Testing & QA** — improved coverage, automation, quality gates\n\n")
-	sb.WriteString("**Epic Design Rules:**\n")
-	sb.WriteString("- Each epic must deliver standalone user/system value (not just a technical layer)\n")
-	sb.WriteString("- Each epic must have 3–7 stories\n")
-	sb.WriteString("- Stories must be independent of future stories (no forward dependencies)\n")
-	sb.WriteString("- Story IDs follow the pattern: `{epic-N}-{story-M}-{kebab-case-title}`\n\n")
-
-	sb.WriteString("### Step 4: Write the New Epics Document\n\n")
-	sb.WriteString("Determine the next available filename for epics (e.g., if `epics.md` exists, use `epics-phase-2.md`;\n")
-	sb.WriteString("if `epics-phase-2.md` exists, use `epics-phase-3.md`, etc.).\n\n")
-	sb.WriteString("Write the document to `_bmad-output/planning-artifacts/{next-epics-filename}.md`.\n\n")
-	sb.WriteString("Use this structure for each epic:\n\n")
-	sb.WriteString("```markdown\n")
-	sb.WriteString("## Epic {N}: {Epic Title}\n\n")
-	sb.WriteString("{Epic goal — what users/system will be able to do after this epic}\n\n")
-	sb.WriteString("### Story {N}.{M}: {Story Title}\n\n")
-	sb.WriteString("As a {user type},\n")
-	sb.WriteString("I want {capability},\n")
-	sb.WriteString("So that {value/benefit}.\n\n")
-	sb.WriteString("**Acceptance Criteria:**\n\n")
-	sb.WriteString("- Given {precondition} When {action} Then {expected outcome}\n")
-	sb.WriteString("- [additional criteria as needed]\n")
-	sb.WriteString("```\n\n")
-
-	sb.WriteString("### Step 5: Update Sprint Status\n\n")
-	sb.WriteString("Append the new epics and their stories to the EXISTING `_bmad-output/implementation-artifacts/sprint-status.yaml`.\n\n")
-	sb.WriteString("**CRITICAL RULES for sprint-status.yaml:**\n")
-	sb.WriteString("- Do NOT remove or modify any existing entries\n")
-	sb.WriteString("- ONLY append new entries to the `development_status` section\n")
-	sb.WriteString("- All new entries must start with status `backlog`\n")
-	sb.WriteString("- Follow the exact existing format:\n\n")
-	sb.WriteString("```yaml\n")
-	sb.WriteString("  epic-{N}: backlog\n")
-	sb.WriteString("  {N}-1-{story-title-kebab}: backlog\n")
-	sb.WriteString("  {N}-2-{story-title-kebab}: backlog\n")
-	sb.WriteString("  # ... more stories ...\n")
-	sb.WriteString("  epic-{N}-retrospective: backlog\n")
-	sb.WriteString("```\n\n")
-	sb.WriteString("- Story key format: `{epic-number}-{story-number}-{title-in-kebab-case}`\n")
-	sb.WriteString("  Example: `3-1-add-user-authentication`, `3-2-implement-oauth-login`\n")
-	sb.WriteString("- Each epic block must end with an `epic-{N}-retrospective: backlog` entry\n\n")
-
-	sb.WriteString("### Step 6: Verify\n\n")
-	sb.WriteString("After writing both files:\n")
-	sb.WriteString("1. Re-read the updated `sprint-status.yaml` and confirm new entries are present\n")
-	sb.WriteString("2. Confirm no existing entries were modified or removed\n")
-	sb.WriteString("3. Confirm the new epics document exists and is well-formed\n")
-	sb.WriteString("4. Print a summary: how many new epics and stories were created\n\n")
 
 	sb.WriteString("---\n\n")
-	sb.WriteString("## Output Summary Required\n\n")
-	sb.WriteString("When complete, output a brief summary:\n")
-	sb.WriteString("- Number of new epics created\n")
-	sb.WriteString("- Number of new stories created\n")
-	sb.WriteString("- Epic numbers used (e.g., Epic 3, Epic 4)\n")
-	sb.WriteString("- Epic document written to\n")
-	sb.WriteString("- Key focus areas addressed\n")
+	sb.WriteString("Now execute the BMAD workflow below, keeping the above context in mind:\n\n")
 
 	return sb.String()
 }
-
-// DefaultMaxEpics is the default maximum number of new epics to generate per planning run.
-const DefaultMaxEpics = 5

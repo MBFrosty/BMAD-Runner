@@ -131,7 +131,7 @@ func main() {
 					},
 					{
 						Name:  "plan-epics",
-						Usage: "Plan new epics and stories using the prime directive (run when all current stories are done)",
+						Usage: "Plan the next epic using the prime directive and update sprint status (runs create-epics-and-stories + sprint-planning)",
 						Flags: append(commonFlags,
 							&cli.StringFlag{
 								Name:  "prime-directive",
@@ -167,7 +167,7 @@ func main() {
 							},
 							&cli.BoolFlag{
 								Name:  "enable-epic-planning",
-								Usage: "When all stories are done, automatically plan new epics guided by the prime directive",
+								Usage: "When all stories are done, automatically plan the next epic via BMAD create-epics-and-stories + sprint-planning",
 							},
 							&cli.StringFlag{
 								Name:  "prime-directive",
@@ -175,7 +175,7 @@ func main() {
 							},
 							&cli.IntFlag{
 								Name:  "max-new-epics",
-								Usage: "Maximum number of new epics to generate per planning run",
+								Usage: "Maximum number of new epics to plan across this auto session (one per no-work event)",
 								Value: planner.DefaultMaxEpics,
 							},
 						),
@@ -316,13 +316,18 @@ func runAuto(c *cli.Context) error {
 	phases := []string{"create-story", "dev-story", "code-review"}
 	ignoreStall := c.Bool("ignore-stall")
 	enableEpicPlanning := c.Bool("enable-epic-planning")
+	maxNewEpics := c.Int("max-new-epics")
+	if maxNewEpics <= 0 {
+		maxNewEpics = planner.DefaultMaxEpics
+	}
+
 	var lastStalledStory string
 	var stallCount int
-	// epicPlanningRan tracks whether we already ran epic planning since the last story
-	// was completed, preventing infinite planning loops.
-	epicPlanningRan := false
+	// epicPlanningCount tracks how many new epics have been planned this session.
+	// Each "no work found" event plans ONE epic (via one targeted BMAD invocation).
+	// Stops when we reach maxNewEpics to prevent unbounded planning.
+	epicPlanningCount := 0
 
-	// Resolve prime directive path once up front.
 	primeDirectivePath := c.String("prime-directive")
 	if primeDirectivePath == "" {
 		primeDirectivePath = filepath.Join(projectRoot, planner.DefaultPrimeDirectivePath)
@@ -341,34 +346,42 @@ func runAuto(c *cli.Context) error {
 
 		action, epicKey, storyKey, found := s.NextWork()
 		if !found {
-			// All current work is done.
-			if !enableEpicPlanning || epicPlanningRan {
+			if !enableEpicPlanning {
 				pterm.Success.Println("All work complete!")
+				return nil
+			}
+			if epicPlanningCount >= maxNewEpics {
+				// Reached the session planning limit — pause for human review.
+				ui.PrintEpicPlanningSessionComplete(epicPlanningCount, maxNewEpics)
 				return nil
 			}
 
-			// Attempt to plan new epics using the prime directive.
-			planErr := runEpicPlanning(c, r, projectRoot, statusPath, primeDirectivePath, agentType, statusData)
-			if planErr == errEpicPlanningNoNewWork || planErr == errEpicPlanningPrimeDirectiveCreated {
-				// Graceful exits: either nothing new was planned, or the user needs to
-				// review the newly created prime directive before continuing.
-				pterm.Success.Println("All work complete!")
+			// Plan ONE new epic via two targeted BMAD invocations, then continue.
+			nextEpicNum := s.NextEpicNumber()
+			planErr := runOneEpicPlanning(c, r, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
+			switch planErr {
+			case nil:
+				// Sprint-status was updated — loop will pick up the new stories.
+				epicPlanningCount++
+				lastStalledStory = ""
+				stallCount = 0
+			case errEpicPlanningNoNewWork:
+				// BMAD ran but didn't add anything new; stop with a summary.
+				if epicPlanningCount > 0 {
+					ui.PrintEpicPlanningSessionComplete(epicPlanningCount, maxNewEpics)
+				} else {
+					pterm.Success.Println("All work complete!")
+				}
 				return nil
-			}
-			if planErr != nil {
+			case errEpicPlanningPrimeDirectiveCreated:
+				// Newly created prime directive — user must edit before continuing.
+				pterm.Success.Println("All work complete — review the prime directive and re-run to enable epic planning.")
+				return nil
+			default:
 				return planErr
 			}
-			epicPlanningRan = true
-			// If the planning added new work, the next iteration will pick it up.
-			// Reset stall tracking since we have a fresh batch of work.
-			lastStalledStory = ""
-			stallCount = 0
 			continue
 		}
-
-		// We have work — reset the epic-planning gate so it can run again
-		// after this entire batch finishes.
-		epicPlanningRan = false
 
 		done, total := s.EpicProgress(epicKey)
 		ui.PrintEpicProgress(epicKey, done, total)
@@ -439,15 +452,23 @@ func runAuto(c *cli.Context) error {
 	return fmt.Errorf("max iterations (%d) reached", maxIter)
 }
 
-// runEpicPlanning handles the automated epic planning phase when all current work is done.
-// It ensures a prime directive exists, then invokes the agent to plan new epics.
-func runEpicPlanning(
+// runOneEpicPlanning handles one epic planning cycle when all current work is done.
+//
+// It runs two targeted BMAD agent invocations in sequence:
+//  1. create-epics-and-stories — with a prime-directive context preamble to scope it
+//     to one new incremental epic (nextEpicNum) for the existing project.
+//  2. sprint-planning — the standard BMAD workflow that reads ALL epic files and
+//     rebuilds sprint-status.yaml, preserving existing story statuses.
+//
+// Returns nil if new work was successfully staged, or a sentinel error for graceful exits.
+func runOneEpicPlanning(
 	c *cli.Context,
 	r *agent.Runner,
-	projectRoot, statusPath, primeDirectivePath, agentType string,
+	statusPath, primeDirectivePath, agentType string,
+	nextEpicNum int,
 	statusBefore []byte,
 ) error {
-	pterm.DefaultSection.Println("No stories remain — initiating automated epic planning")
+	pterm.DefaultSection.Printf("No stories remain — planning Epic %d via BMAD workflow", nextEpicNum)
 
 	// Ensure the prime directive exists; create default if missing.
 	created, err := planner.EnsurePrimeDirective(primeDirectivePath)
@@ -460,75 +481,68 @@ func runEpicPlanning(
 		return errEpicPlanningPrimeDirectiveCreated
 	}
 
-	// Read the prime directive.
 	pdContent, err := planner.ReadPrimeDirective(primeDirectivePath)
 	if err != nil {
 		return fmt.Errorf("reading prime directive: %w", err)
 	}
 
 	if planner.IsDefaultPrimeDirective(pdContent) {
-		pterm.Warning.Println("Prime directive appears to be unedited.")
-		pterm.Info.Printf("Edit %s to describe your project goals, then re-run.\n", primeDirectivePath)
-		pterm.Info.Println("Proceeding with planning anyway — results may be generic.")
+		pterm.Warning.Println("Prime directive appears to be unedited — results may be generic.")
+		pterm.Info.Printf("Edit %s to describe your project goals.\n", primeDirectivePath)
 	}
 
 	maxNewEpics := c.Int("max-new-epics")
-	if maxNewEpics <= 0 {
-		maxNewEpics = planner.DefaultMaxEpics
+	ui.PrintEpicPlanningBanner(primeDirectivePath, nextEpicNum, maxNewEpics)
+
+	// --- Phase A: plan one epic via create-epics-and-stories ---
+	epicContext := planner.BuildEpicContext(pdContent, nextEpicNum)
+	epicModel := c.String("model")
+	if epicModel == "" {
+		epicModel = defaultModelForAgentType(agentType, "create-epics-and-stories")
 	}
 
-	ui.PrintEpicPlanningBanner(primeDirectivePath, maxNewEpics)
-
-	prompt := planner.BuildPrompt(pdContent, projectRoot, maxNewEpics)
-
-	epicPlanModel := c.String("model")
-	if epicPlanModel == "" {
-		epicPlanModel = defaultModelForAgentType(agentType, "plan-epics")
-	}
-
-	if err := r.RunWithPrompt(prompt, "plan-epics", epicPlanModel); err != nil {
-		pterm.Error.Printf("Epic planning failed: %v\n", err)
+	pterm.Info.Printf("Phase A: create-epics-and-stories (Epic %d)\n", nextEpicNum)
+	if err := r.RunPhaseWithContext(epicContext, "create-epics-and-stories", epicModel); err != nil {
+		pterm.Error.Printf("create-epics-and-stories failed: %v\n", err)
 		return err
 	}
 
-	// Check whether the agent actually updated sprint-status.yaml.
+	// --- Phase B: sprint-planning to update sprint-status.yaml ---
+	sprintModel := c.String("model")
+	if sprintModel == "" {
+		sprintModel = defaultModelForAgentType(agentType, "sprint-planning")
+	}
+
+	pterm.Info.Println("Phase B: sprint-planning (updating sprint-status.yaml)")
+	if err := r.Run("sprint-planning", sprintModel); err != nil {
+		pterm.Error.Printf("sprint-planning failed: %v\n", err)
+		return err
+	}
+
+	// Check whether sprint-status.yaml was actually updated.
 	statusAfter, err := os.ReadFile(statusPath)
 	if err != nil {
-		return fmt.Errorf("re-reading status file after epic planning: %w", err)
+		return fmt.Errorf("re-reading status file after sprint-planning: %w", err)
 	}
 	if bytes.Equal(statusBefore, statusAfter) {
-		pterm.Warning.Println("Epic planning did not add new stories to sprint-status.yaml.")
-		pterm.Success.Println("All work complete — no additional epics were staged.")
-		// Return a sentinel to signal the caller to exit.
+		pterm.Warning.Println("sprint-planning did not update sprint-status.yaml — no new stories detected.")
 		return errEpicPlanningNoNewWork
 	}
 
-	pterm.Success.Println("New epics staged — continuing auto loop with new work.")
+	pterm.Success.Printf("Epic %d staged — continuing auto loop.\n", nextEpicNum)
 	pterm.Println()
 
-	// Optionally pause so the user can review what was planned.
-	noPause := c.Bool("no-pause-after-retro") // reuse the same flag for consistency
-	if !noPause && term.IsTerminal(int(os.Stdin.Fd())) {
-		pterm.Info.Println("Review the planned epics, then press Enter to begin development...")
+	// Pause for review in interactive terminals (reuse --no-pause-after-retro flag).
+	if !c.Bool("no-pause-after-retro") && term.IsTerminal(int(os.Stdin.Fd())) {
+		pterm.Info.Printf("Review the planned epic, then press Enter to begin development...\n")
 		bufio.NewReader(os.Stdin).ReadBytes('\n')
 	}
 
 	return nil
 }
 
-// Sentinel errors for runEpicPlanning. These are treated as graceful exits
-// by the auto loop (exit 0), not as failures.
-var (
-	// errEpicPlanningNoNewWork is returned when the agent ran but didn't add any new
-	// entries to sprint-status.yaml.
-	errEpicPlanningNoNewWork = fmt.Errorf("epic planning complete: no new work added")
-	// errEpicPlanningPrimeDirectiveCreated is returned when a default prime directive
-	// was just created and the user must review it before planning can run.
-	errEpicPlanningPrimeDirectiveCreated = fmt.Errorf("prime directive created: review and re-run")
-)
-
 // runPlanEpicsCommand is the action for `bmad-runner run plan-epics`.
-// It runs the epic planning phase standalone, without the auto loop.
+// Plans the next epic standalone (without the auto loop).
 func runPlanEpicsCommand(c *cli.Context) error {
 	projectRoot, statusPath, err := config.ResolveProjectRoot(c.String("status-file"), c.String("project-root"))
 	if err != nil {
@@ -558,16 +572,33 @@ func runPlanEpicsCommand(c *cli.Context) error {
 		return fmt.Errorf("reading status file: %w", err)
 	}
 
-	planErr := runEpicPlanning(c, r, projectRoot, statusPath, primeDirectivePath, agentType, statusData)
-	if planErr == errEpicPlanningPrimeDirectiveCreated {
-		return nil // User needs to review; exit cleanly.
+	s, err := status.Parse(statusPath)
+	if err != nil {
+		return fmt.Errorf("parsing status file: %w", err)
 	}
-	if planErr == errEpicPlanningNoNewWork {
-		pterm.Success.Println("Epic planning complete — no new work was added.")
-		return nil
+
+	nextEpicNum := s.NextEpicNumber()
+	planErr := runOneEpicPlanning(c, r, statusPath, primeDirectivePath, agentType, nextEpicNum, statusData)
+	switch planErr {
+	case nil:
+		pterm.Success.Printf("Epic %d planning complete.\n", nextEpicNum)
+	case errEpicPlanningPrimeDirectiveCreated, errEpicPlanningNoNewWork:
+		// Graceful exit — message already printed.
+	default:
+		return planErr
 	}
-	return planErr
+	return nil
 }
+
+// Sentinel errors for runOneEpicPlanning — treated as graceful exits (exit 0).
+var (
+	// errEpicPlanningNoNewWork is returned when both BMAD phases ran but sprint-status
+	// was not updated (e.g. the agent didn't find/add anything new).
+	errEpicPlanningNoNewWork = fmt.Errorf("epic planning: no new work added to sprint-status")
+	// errEpicPlanningPrimeDirectiveCreated is returned when a default prime directive
+	// was just created and the user must review it before planning can run.
+	errEpicPlanningPrimeDirectiveCreated = fmt.Errorf("prime directive created: review and re-run")
+)
 
 func resolveAgentType(s string) string {
 	switch s {
@@ -585,13 +616,15 @@ func defaultModelForAgentType(agentType string, phase string) string {
 	case config.AgentTypeClaudeCode:
 		switch phase {
 		case "create-story":
-			return "opus" // bigger expensive model
+			return "opus"
 		case "dev-story":
-			return "haiku" // light fast model
+			return "haiku"
 		case "code-review", "retrospective":
-			return "sonnet" // medium model
-		case "plan-epics":
-			return "opus" // epic planning benefits from the most capable model
+			return "sonnet"
+		// Epic planning uses the most capable model: creating good epics saves
+		// many dev cycles later.
+		case "create-epics-and-stories", "sprint-planning":
+			return "opus"
 		default:
 			return "sonnet"
 		}
@@ -603,7 +636,7 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "gemini-3-flash"
 		case "code-review", "retrospective":
 			return "gemini-3-pro"
-		case "plan-epics":
+		case "create-epics-and-stories", "sprint-planning":
 			return "gemini-3-pro"
 		default:
 			return "gemini-3-pro"
@@ -616,7 +649,7 @@ func defaultModelForAgentType(agentType string, phase string) string {
 			return "composer-1.5"
 		case "code-review", "retrospective":
 			return "gemini-3-flash"
-		case "plan-epics":
+		case "create-epics-and-stories", "sprint-planning":
 			return "claude-4.6-sonnet-medium"
 		default:
 			return "composer-1.5"

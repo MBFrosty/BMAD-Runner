@@ -247,9 +247,26 @@ func (r *Runner) resolveCommandFile(phase string) string {
 }
 
 // RunWithPrompt executes an agent phase using a pre-built prompt string instead of
-// reading from a command file. Use this for dynamically generated phases such as
-// plan-epics where the prompt is constructed programmatically.
+// reading from a command file. Use this for dynamically generated phases where the
+// prompt is constructed entirely in Go.
 func (r *Runner) RunWithPrompt(prompt, phase, model string) error {
+	return r.runPrompt(prompt, phase, model)
+}
+
+// RunPhaseWithContext reads the BMAD command file for the given phase, prepends a
+// targeted context block, and runs the agent. The context block narrows the scope of
+// the BMAD workflow (e.g. "add one incremental epic") while still driving the real
+// BMAD workflow rather than generating content from scratch.
+func (r *Runner) RunPhaseWithContext(context, phase, model string) error {
+	commandFile := r.resolveCommandFile(phase)
+	data, err := os.ReadFile(commandFile)
+	if err != nil {
+		return fmt.Errorf("reading command file %s: %w", commandFile, err)
+	}
+
+	// context + yolo preamble wrapping the actual BMAD command content
+	prompt := buildYoloPrompt(context + string(data))
+
 	return r.runPrompt(prompt, phase, model)
 }
 
