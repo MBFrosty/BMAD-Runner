@@ -45,7 +45,12 @@ func Parse(path string) (*SprintStatus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading sprint-status file: %w", err)
 	}
+	return ParseBytes(data)
+}
 
+// ParseBytes parses sprint-status YAML from an in-memory byte slice.
+// This is useful when the raw bytes are already loaded (e.g. for stall detection).
+func ParseBytes(data []byte) (*SprintStatus, error) {
 	var status SprintStatus
 	if err := yaml.Unmarshal(data, &status); err != nil {
 		return nil, fmt.Errorf("unmarshaling yaml: %w", err)

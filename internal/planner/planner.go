@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -107,13 +108,76 @@ func IsDefaultPrimeDirective(content string) bool {
 		strings.Contains(content, "(Describe your next milestone or desired outcome)")
 }
 
-// BuildEpicContext returns a small targeted preamble to prepend to the BMAD
+// FindEpicsFile searches for the existing epics document in standard BMAD output locations.
+// Returns the path if found, or empty string if not.
+func FindEpicsFile(projectRoot string) string {
+	candidates := []string{
+		filepath.Join(projectRoot, "_bmad-output", "planning-artifacts", "epics.md"),
+		filepath.Join(projectRoot, "_bmad-output", "planning-artifacts", "bmm-epics.md"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	// Fuzzy glob fallback: any *epic*.md in planning-artifacts
+	matches, _ := filepath.Glob(filepath.Join(projectRoot, "_bmad-output", "planning-artifacts", "*epic*.md"))
+	if len(matches) > 0 {
+		return matches[0]
+	}
+	return ""
+}
+
+// FindRetroFiles returns paths to retrospective files in the implementation-artifacts directory,
+// sorted newest-first (by filename, which encodes the date). maxFiles limits the result;
+// pass 0 for no limit.
+func FindRetroFiles(projectRoot string, maxFiles int) []string {
+	pattern := filepath.Join(projectRoot, "_bmad-output", "implementation-artifacts", "epic-*-retro-*.md")
+	matches, _ := filepath.Glob(pattern)
+	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	if maxFiles > 0 && len(matches) > maxFiles {
+		return matches[:maxFiles]
+	}
+	return matches
+}
+
+// EpicPlanningContext holds all inputs for BuildEpicContext.
+type EpicPlanningContext struct {
+	// PrimeDirective is the content of the prime directive file (may be empty).
+	PrimeDirective string
+
+	// NextEpicNum is the sequential number of the epic to plan (e.g. 3 means "plan Epic 3").
+	NextEpicNum int
+
+	// EpicsFilePath is the path to the existing epics document.
+	// When set, the agent is directed to read it first so it doesn't duplicate existing epics.
+	EpicsFilePath string
+
+	// RetroFilePaths are paths to recent retrospective files (newest first).
+	// When set, the agent is directed to read them for lessons learned and tech debt items.
+	RetroFilePaths []string
+
+	// CompletedEpics is the list of epic keys that are fully done (e.g. ["epic-1", "epic-2"]).
+	// Injected into the context so the agent knows what's already been built.
+	CompletedEpics []string
+
+	// StatusFilePath is the path to sprint-status.yaml.
+	// Shown to the agent so it can verify the current project state.
+	StatusFilePath string
+}
+
+// BuildEpicContext returns a targeted preamble to prepend to the BMAD
 // create-epics-and-stories command file. It scopes the BMAD workflow to adding
-// ONE incremental epic for an existing in-progress project, starting at nextEpicNum.
+// ONE incremental epic for an existing in-progress project.
 //
-// This is NOT a self-contained prompt — it is a context block prepended before the
-// actual BMAD command content so the BMAD workflow executes with the right scope.
-func BuildEpicContext(primeDirective string, nextEpicNum int) string {
+// The preamble includes explicit pre-flight read instructions so the agent
+// loads existing epics and retrospective notes before planning — this prevents
+// duplication and incorporates lessons learned without requiring a separate
+// context-gathering agent invocation.
+//
+// This is NOT a self-contained prompt — it is prepended before the actual BMAD
+// command content so the real BMAD workflow executes with the right scope.
+func BuildEpicContext(ctx EpicPlanningContext) string {
 	var sb strings.Builder
 
 	sb.WriteString("# Incremental Epic Planning — Context (Read This First)\n\n")
@@ -121,20 +185,59 @@ func BuildEpicContext(primeDirective string, nextEpicNum int) string {
 	sb.WriteString("> You are NOT starting a new project from scratch.\n")
 	sb.WriteString("> The BMAD workflow below is being used to add **one new epic** to an existing project.\n\n")
 
+	// --- Pre-flight read instructions ---
+	// Direct the agent to read key project files BEFORE executing the BMAD workflow.
+	// This grounds the planning in actual project state rather than just PRD/architecture.
+	hasPreflight := ctx.EpicsFilePath != "" || len(ctx.RetroFilePaths) > 0 || ctx.StatusFilePath != ""
+	if hasPreflight {
+		sb.WriteString("## Pre-Flight: Read These Files Before Planning\n\n")
+		sb.WriteString("You **MUST** read the following files before executing the BMAD workflow.\n")
+		sb.WriteString("They contain critical context that the workflow steps do not automatically load.\n\n")
+
+		if ctx.EpicsFilePath != "" {
+			sb.WriteString(fmt.Sprintf("**1. Existing Epics Document** — read this FIRST:\n"))
+			sb.WriteString(fmt.Sprintf("   - File: `%s`\n", ctx.EpicsFilePath))
+			sb.WriteString("   - Purpose: Understand ALL epics already planned; do NOT duplicate or conflict with them\n")
+			if len(ctx.CompletedEpics) > 0 {
+				sb.WriteString(fmt.Sprintf("   - Already completed: %s\n", strings.Join(ctx.CompletedEpics, ", ")))
+			}
+			sb.WriteString("\n")
+		}
+
+		if len(ctx.RetroFilePaths) > 0 {
+			sb.WriteString("**2. Recent Retrospective(s)** — read for lessons learned:\n")
+			for _, p := range ctx.RetroFilePaths {
+				sb.WriteString(fmt.Sprintf("   - `%s`\n", p))
+			}
+			sb.WriteString("   - Purpose: Apply technical debt items, action items, and next-epic recommendations\n\n")
+		}
+
+		if ctx.StatusFilePath != "" {
+			sb.WriteString("**3. Sprint Status** — confirm current project state:\n")
+			sb.WriteString(fmt.Sprintf("   - File: `%s`\n", ctx.StatusFilePath))
+			sb.WriteString("   - Purpose: Verify which stories are done, in-progress, or backlogged\n\n")
+		}
+
+		sb.WriteString("---\n\n")
+	}
+
+	// --- Scope definition ---
 	sb.WriteString("## Your Specific Scope\n\n")
-	sb.WriteString(fmt.Sprintf("- Plan **Epic %d only** (the next epic in sequence)\n", nextEpicNum))
+	sb.WriteString(fmt.Sprintf("- Plan **Epic %d only** (the next epic in sequence)\n", ctx.NextEpicNum))
 	sb.WriteString("- **Append** this epic to the existing epics document — do NOT overwrite or rewrite existing epics\n")
 	sb.WriteString("- Give this epic **3–7 stories** that are actionable and independently testable\n")
 	sb.WriteString("- Skip strict prerequisite validation steps — use whatever documents already exist in the project\n")
 	sb.WriteString("- If the workflow asks to design all epics, limit yourself to this one new epic only\n\n")
 
-	if primeDirective != "" {
+	// --- Prime directive ---
+	if ctx.PrimeDirective != "" {
 		sb.WriteString("## Prime Directive (Your Strategic Guide)\n\n")
 		sb.WriteString("Use the following to determine the focus area for this new epic:\n\n")
-		sb.WriteString(primeDirective)
+		sb.WriteString(ctx.PrimeDirective)
 		sb.WriteString("\n\n")
 	}
 
+	// --- Fallback focus priorities ---
 	sb.WriteString("## Focus Priorities (if prime directive does not specify)\n\n")
 	sb.WriteString("Consider these areas in order of impact:\n")
 	sb.WriteString("1. **Hardening** — stability, reliability, error handling, edge cases\n")

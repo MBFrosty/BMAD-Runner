@@ -494,8 +494,32 @@ func runOneEpicPlanning(
 	maxNewEpics := c.Int("max-new-epics")
 	ui.PrintEpicPlanningBanner(primeDirectivePath, nextEpicNum, maxNewEpics)
 
+	// Discover project files to ground the planning context in actual project state.
+	projectRoot, _, _ := config.ResolveProjectRoot(c.String("status-file"), c.String("project-root"))
+	epicsFile := planner.FindEpicsFile(projectRoot)
+	retroFiles := planner.FindRetroFiles(projectRoot, 2) // include at most last 2 retros
+
+	// Collect the list of fully-completed epic keys so the agent knows what's already built.
+	// Parse the status from statusBefore (the snapshot taken just before planning starts).
+	var completedEpics []string
+	if s, parseErr := status.ParseBytes(statusBefore); parseErr == nil {
+		for k, v := range s.DevStatus {
+			if strings.HasPrefix(k, "epic-") && !strings.Contains(k, "-retrospective") && v == "done" {
+				completedEpics = append(completedEpics, k)
+			}
+		}
+	}
+
 	// --- Phase A: plan one epic via create-epics-and-stories ---
-	epicContext := planner.BuildEpicContext(pdContent, nextEpicNum)
+	epicCtx := planner.EpicPlanningContext{
+		PrimeDirective: pdContent,
+		NextEpicNum:    nextEpicNum,
+		EpicsFilePath:  epicsFile,
+		RetroFilePaths: retroFiles,
+		CompletedEpics: completedEpics,
+		StatusFilePath: statusPath,
+	}
+	epicContext := planner.BuildEpicContext(epicCtx)
 	epicModel := c.String("model")
 	if epicModel == "" {
 		epicModel = defaultModelForAgentType(agentType, "create-epics-and-stories")
