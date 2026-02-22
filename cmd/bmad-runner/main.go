@@ -342,7 +342,6 @@ func runAuto(c *cli.Context) error {
 	}
 
 	maxIter := c.Int("max-iterations")
-	phases := []string{"create-story", "dev-story", "code-review"}
 	ignoreStall := c.Bool("ignore-stall")
 	enableEpicPlanning := c.Bool("enable-epic-planning")
 	maxNewEpics := c.Int("max-new-epics")
@@ -438,9 +437,20 @@ func runAuto(c *cli.Context) error {
 			continue
 		}
 
-		// Run story pipeline
-		for i, phase := range phases {
-			ui.PrintPipeline(phases, i)
+		// Run story pipeline dynamically based on story status
+		var runPhases []string
+		storyStatus := s.DevStatus[storyKey]
+		switch storyStatus {
+		case "drafted", "in-progress":
+			runPhases = []string{"dev-story", "code-review"}
+		case "in-review":
+			runPhases = []string{"code-review"}
+		default: // "backlog" or unknown
+			runPhases = []string{"create-story", "dev-story", "code-review"}
+		}
+
+		for i, phase := range runPhases {
+			ui.PrintPipeline(runPhases, i)
 
 			phaseModel := c.String("model")
 			if phaseModel == "" {
@@ -468,8 +478,8 @@ func runAuto(c *cli.Context) error {
 				lastStalledStory = storyKey
 				stallCount = 1
 			}
-			if !ignoreStall && stallCount >= 2 {
-				return fmt.Errorf("stall detected: sprint-status.yaml unchanged after 2 runs for story %s — update it manually (mark story done) and run again", storyKey)
+			if !ignoreStall && stallCount >= 3 {
+				return fmt.Errorf("stall detected: sprint-status.yaml unchanged after 3 runs for story %s — update it manually (mark story done) and run again", storyKey)
 			}
 			pterm.Warning.Printf("sprint-status.yaml unchanged — workflow may not have updated it. Continuing to next iteration.\n")
 		} else {
