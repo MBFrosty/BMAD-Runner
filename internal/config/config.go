@@ -81,7 +81,8 @@ func LookupAgent(agentPath string, agentType string) (string, error) {
 }
 
 // execLookPath checks common locations and PATH for the named binary.
-func execLookPath(name string) (string, error) {
+// Package-level var for testability.
+var execLookPath = func(name string) (string, error) {
 	home, _ := os.UserHomeDir()
 	commonPaths := []string{
 		filepath.Join(home, ".local/bin", name),
