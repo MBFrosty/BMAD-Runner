@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"strings"
 	"time"
 
@@ -15,6 +16,43 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/pterm/pterm"
 )
+
+// colorDisabled is true when NO_COLOR is set; ansiWrap returns plain text.
+// When NO_COLOR is set, all visual effects (ball glow, trail, paddle styling, hit flash, color cycling) are disabled.
+var colorDisabled = os.Getenv("NO_COLOR") != ""
+
+// ANSI SGR codes (omit when colorDisabled)
+const (
+	ansiBrightCyan  = "96"
+	ansiBrightWhite = "97"
+	ansiCyan        = "36"
+	ansiBold        = "1"
+	ansiDim         = "2"
+	ansiBrightYellow = "93"
+)
+
+// ansiWrap wraps s with ANSI SGR codes; returns s unchanged when colorDisabled.
+// Used for all visual effects: ball glow (bold + color), trail (dim), paddle styling (bright white/yellow flash), hit flash (bright yellow).
+func ansiWrap(s string, codes ...string) string {
+	if colorDisabled || len(codes) == 0 {
+		return s
+	}
+	seq := "\x1b[" + strings.Join(codes, ";") + "m"
+	return seq + s + "\x1b[0m"
+}
+
+// ballPalette cycles through bright colors for the ball (cyan → magenta → blue → yellow → green → red).
+// Color cycling creates a visual effect where the ball glows in different colors as it moves.
+var ballPalette = []string{"96", "95", "94", "93", "92", "91"}
+
+// ballColor returns the ANSI color code for the ball at slowFrame (cycles through ballPalette).
+// Used with ansiWrap to create the ball's glowing effect; disabled when NO_COLOR is set.
+func ballColor(slowFrame int) string {
+	if slowFrame < 0 {
+		slowFrame = 0
+	}
+	return ballPalette[slowFrame%len(ballPalette)]
+}
 
 // DemoStripStyle identifies which animation style to use for the demo strip.
 type DemoStripStyle int
@@ -60,63 +98,63 @@ func demoWaveStream(frameIdx, lineIdx, totalLines int) string {
 	return string(buf[:])
 }
 
-// demoPongBounce: Pong-like ball bouncing left-right across the strip.
-// Wider (6 cols), slower (2x), thicker paddles (2 rows) that the ball collides with.
-func demoPongBounce(frameIdx, lineIdx, totalLines int) string {
-	slowFrame := frameIdx / pongSlowDiv
-
-	// Horizontal bounce: left wall (0) to right wall (12, at log box) and back
+// pongBallPos returns the (row, col) of the ball at slowFrame for a court of totalLines.
+// Pure function: horizontal bounce (left-right across strip), vertical bounce (top-bottom),
+// wobble on paddle hit (random horizontal offset when ball reaches top/bottom row).
+// Used by demoPongBounce to position the ball and calculate trail positions (slowFrame-1, slowFrame-2).
+func pongBallPos(slowFrame, totalLines int) (row, col int) {
 	horizontalSeq := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1}
 	horizLen := len(horizontalSeq)
-	mod := func(a, n int) int {
-		r := a % n
-		if r < 0 {
-			r += n
-		}
-		return r
-	}
 	baseColAt := func(sf int) int {
 		return horizontalSeq[mod(sf, horizLen)]
 	}
 
-	// Vertical bounce: ball moves up-down for full Pong court
 	vertLen := 2 * (totalLines - 1)
 	if vertLen < 1 {
 		vertLen = 1
 	}
 	vertPhase := mod(slowFrame, vertLen)
-	var ballRow int
 	if vertPhase < totalLines {
-		ballRow = vertPhase
+		row = vertPhase
 	} else {
-		ballRow = vertLen - vertPhase
+		row = vertLen - vertPhase
 	}
 
-	// Wobble only when ball hits a paddle (top or bottom), not in mid-flight
-	ballColAt := func(sf int) int {
-		base := baseColAt(sf)
-		vp := mod(sf, vertLen)
-		var row int
-		if vp < totalLines {
-			row = vp
-		} else {
-			row = vertLen - vp
+	base := baseColAt(slowFrame)
+	if row == 0 || row == totalLines-1 {
+		r := rand.New(rand.NewSource(int64(slowFrame)))
+		if r.Intn(4) == 0 {
+			base += r.Intn(3) - 1
 		}
-		if row == 0 || row == totalLines-1 {
-			r := rand.New(rand.NewSource(int64(sf)))
-			if r.Intn(4) == 0 {
-				base += r.Intn(3) - 1
-			}
-		}
-		if base < 0 {
-			base = 0
-		}
-		if base >= pongStripWidth {
-			base = pongStripWidth - 1
-		}
-		return base
 	}
-	ballCol := ballColAt(slowFrame)
+	if base < 0 {
+		base = 0
+	}
+	if base >= pongStripWidth {
+		base = pongStripWidth - 1
+	}
+	col = base
+	return row, col
+}
+
+// demoPongBounce: Pong-like ball bouncing left-right across the strip.
+// Visual effects:
+//   - Ball glow: bold ball character (●) with color cycling via ballColor(slowFrame) and ansiWrap
+//   - Trail: two previous positions rendered as dimmed characters (░, ·) using ansiWrap with ansiDim
+//   - Paddle styling: thick blocks (▓) in bright white, flash bright yellow on hit
+//   - Hit flash: ball turns bright yellow when hitting top/bottom paddle
+//   - Color cycling: ball cycles through ballPalette colors as it moves
+//   - NO_COLOR: all ansiWrap calls return plain text when colorDisabled is true
+// Paddles track ball position when ball is moving toward them, stay at last hit position otherwise.
+func demoPongBounce(frameIdx, lineIdx, totalLines int) string {
+	slowFrame := frameIdx / pongSlowDiv
+	ballRow, ballCol := pongBallPos(slowFrame, totalLines)
+
+	vertLen := 2 * (totalLines - 1)
+	if vertLen < 1 {
+		vertLen = 1
+	}
+	vertPhase := mod(slowFrame, vertLen)
 
 	// Paddles track the ball only when it's headed towards them; otherwise stay at last hit position
 	ballMovingDown := vertPhase < totalLines
@@ -136,9 +174,12 @@ func demoPongBounce(frameIdx, lineIdx, totalLines int) string {
 	if lastBottomFrame > slowFrame {
 		lastBottomFrame -= vertLen
 	}
+	if lastBottomFrame < 0 {
+		lastBottomFrame = 0
+	}
 
-	topPaddleCenter := ballColAt(lastTopFrame)
-	bottomPaddleCenter := ballColAt(lastBottomFrame)
+	_, topPaddleCenter := pongBallPos(lastTopFrame, totalLines)
+	_, bottomPaddleCenter := pongBallPos(lastBottomFrame, totalLines)
 	if ballMovingUp {
 		topPaddleCenter = ballCol
 	}
@@ -164,19 +205,53 @@ func demoPongBounce(frameIdx, lineIdx, totalLines int) string {
 	topLeft, topRight := clampPaddle(topPaddleCenter)
 	botLeft, botRight := clampPaddle(bottomPaddleCenter)
 
-	var buf [pongStripWidth]rune
-	for col := 0; col < pongStripWidth; col++ {
-		if lineIdx == ballRow && col == ballCol {
-			buf[col] = '●' // ball
-		} else if inTopPaddle && col >= topLeft && col <= topRight {
-			buf[col] = '═' // top paddle
-		} else if inBottomPaddle && col >= botLeft && col <= botRight {
-			buf[col] = '═' // bottom paddle
-		} else {
-			buf[col] = ' '
+	// Trail positions (clamp slowFrame-1/-2 to 0 if negative)
+	// Trail creates motion blur effect: previous positions rendered with dimmed characters
+	prevRow1, prevCol1 := pongBallPos(max(0, slowFrame-1), totalLines)
+	prevRow2, prevCol2 := pongBallPos(max(0, slowFrame-2), totalLines)
+
+	// Hit flash: ball at top or bottom row triggers bright yellow flash for ball and paddle
+	hitFlash := ballRow == 0 || ballRow == totalLines-1
+	topPaddleHit := hitFlash && ballRow == 0
+	bottomPaddleHit := hitFlash && ballRow == totalLines-1
+
+		// Priority: ball > paddle > trail > empty
+		// All visual effects use ansiWrap, which returns plain text when NO_COLOR is set
+		var cells [pongStripWidth]string
+		for col := 0; col < pongStripWidth; col++ {
+			switch {
+			case lineIdx == ballRow && col == ballCol:
+				// Ball glow: bold character with color cycling (or bright yellow on hit flash)
+				if hitFlash {
+					cells[col] = ansiWrap("●", ansiBold, ansiBrightYellow)
+				} else {
+					cells[col] = ansiWrap("●", ansiBold, ballColor(slowFrame))
+				}
+			case inTopPaddle && col >= topLeft && col <= topRight:
+				// Paddle styling: bright white normally, bright yellow flash on hit
+				if topPaddleHit {
+					cells[col] = ansiWrap("▓", ansiBrightYellow)
+				} else {
+					cells[col] = ansiWrap("▓", ansiBrightWhite)
+				}
+			case inBottomPaddle && col >= botLeft && col <= botRight:
+				// Paddle styling: bright white normally, bright yellow flash on hit
+				if bottomPaddleHit {
+					cells[col] = ansiWrap("▓", ansiBrightYellow)
+				} else {
+					cells[col] = ansiWrap("▓", ansiBrightWhite)
+				}
+			case lineIdx == prevRow1 && col == prevCol1:
+				// Trail: dimmed character with color from previous frame
+				cells[col] = ansiWrap("░", ansiDim, ballColor(slowFrame-1))
+			case lineIdx == prevRow2 && col == prevCol2:
+				// Trail: dimmed dot for older position
+				cells[col] = ansiWrap("·", ansiDim)
+			default:
+				cells[col] = " "
+			}
 		}
-	}
-	return string(buf[:])
+	return strings.Join(cells[:], "")
 }
 
 // DemoStyleName returns a short name for the style.
