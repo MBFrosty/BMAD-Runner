@@ -1,0 +1,14 @@
+agent:
+    metadata:
+        name: ""
+persona:
+    communication_style: ""
+    identity: ""
+    principles: []
+    role: ""
+critical_actions: []
+memories:
+    - 'After create-story completes and sprint-status.yaml is updated to ready-for-dev, run: exogram epic import'
+    - 'After code-review completes and sprint-status.yaml is updated to done, run: exogram epic import'
+menu: []
+prompts: []

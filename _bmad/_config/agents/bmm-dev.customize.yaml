@@ -1,0 +1,17 @@
+agent:
+    metadata:
+        name: ""
+persona:
+    communication_style: ""
+    identity: ""
+    principles: []
+    role: ""
+critical_actions: []
+memories:
+    - 'After modifying sprint-status.yaml (any story status change), run: exogram epic import'
+    - 'Before editing significant files, run: exogram impact <file_path> to assess blast radius'
+    - 'When deferring work or identifying out-of-scope items, run: exogram task add "Future: <short title>"'
+    - 'Link files to tasks as you work on them: exogram task link <task_id> <file_path>'
+    - 'When a task is complete, update its status: exogram task update <task_id> --status done'
+menu: []
+prompts: []
