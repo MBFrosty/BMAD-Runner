@@ -13,3 +13,13 @@ Use Exogram as the source of truth for task capture and task-state management.
 - Do not run `exogram task next` automatically; run it only when the user requests reprioritization.
 - Periodically report task graph changes to the user (created/updated/deferred tasks and status).
 <!-- EXOGRAM_MANAGED_END -->
+
+<!-- EXOGRAM_CONTEXT_START -->
+## Exogram Project Context (Auto-Updated)
+
+**Last updated:** 2026-02-24T03:47:39Z
+
+**Unblocked tasks:** none
+
+**Index status:** commit HEAD @ 2026-02-24T03:47:39Z
+<!-- EXOGRAM_CONTEXT_END -->

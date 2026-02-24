@@ -13,3 +13,13 @@ Use Exogram to maintain task context during development and keep user-visible st
 - Do not automatically run `exogram task next` on session start.
 - Provide periodic summaries of task operations and rationale to the user.
 <!-- EXOGRAM_MANAGED_END -->
+
+<!-- EXOGRAM_CONTEXT_START -->
+## Exogram Project Context (Auto-Updated)
+
+**Last updated:** 2026-02-24T03:47:39Z
+
+**Unblocked tasks:** none
+
+**Index status:** commit HEAD @ 2026-02-24T03:47:39Z
+<!-- EXOGRAM_CONTEXT_END -->
