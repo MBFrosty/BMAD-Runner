@@ -10,14 +10,14 @@ import (
 func TestResolveProjectRoot(t *testing.T) {
 	tmp := t.TempDir()
 	tests := []struct {
-		name              string
-		statusFile        string
+		name                string
+		statusFile          string
 		projectRootOverride string
-		check             func(*testing.T, string, string, error)
+		check               func(*testing.T, string, string, error)
 	}{
 		{
-			name:               "with override",
-			statusFile:         "s.yaml",
+			name:                "with override",
+			statusFile:          "s.yaml",
 			projectRootOverride: tmp,
 			check: func(t *testing.T, root, status string, err error) {
 				if err != nil {
@@ -33,8 +33,8 @@ func TestResolveProjectRoot(t *testing.T) {
 			},
 		},
 		{
-			name:               "without override default logic",
-			statusFile:         filepath.Join(tmp, "a", "b", "status.yaml"),
+			name:                "without override default logic",
+			statusFile:          filepath.Join(tmp, "a", "b", "status.yaml"),
 			projectRootOverride: "",
 			check: func(t *testing.T, root, status string, err error) {
 				if err != nil {
@@ -50,8 +50,8 @@ func TestResolveProjectRoot(t *testing.T) {
 			},
 		},
 		{
-			name:               "relative status file resolves",
-			statusFile:         "relative/path.yaml",
+			name:                "relative status file resolves",
+			statusFile:          "relative/path.yaml",
 			projectRootOverride: "",
 			check: func(t *testing.T, root, status string, err error) {
 				if err != nil {
@@ -75,8 +75,8 @@ func TestDefaultModel(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		agentType string
-		phase    string
-		want     string
+		phase     string
+		want      string
 	}{
 		{AgentTypeCursorAgent, "create-story", "claude-4.6-sonnet-medium"},
 		{AgentTypeClaudeCode, "dev-story", "haiku"},
@@ -84,6 +84,13 @@ func TestDefaultModel(t *testing.T) {
 		{AgentTypeCursorAgent, "nonexistent-phase", "composer-1.5"},
 		{"unknown-agent", "create-story", "claude-4.6-sonnet-medium"},
 		{"unknown-agent", "nonexistent", "composer-1.5"},
+		{AgentTypeOpenCode, "create-story", "opencode-go/kimi-k2.5"},
+		{AgentTypeOpenCode, "dev-story", "opencode-go/minimax-m2.5"},
+		{AgentTypeOpenCode, "code-review", "opencode-go/kimi-k2.5"},
+		{AgentTypeOpenCode, "retrospective", "opencode-go/kimi-k2.5"},
+		{AgentTypeOpenCode, "correct-course", "opencode-go/glm-5"},
+		{AgentTypeOpenCode, "sprint-planning", "opencode-go/glm-5"},
+		{AgentTypeOpenCode, "nonexistent-phase", "opencode-go/kimi-k2.5"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.agentType+"_"+tt.phase, func(t *testing.T) {
@@ -163,6 +170,18 @@ func TestLookupAgent(t *testing.T) {
 			wantPath: "/usr/bin/agent",
 		},
 		{
+			name:      "opencode found via PATH",
+			agentPath: "",
+			agentType: AgentTypeOpenCode,
+			stub: func(name string) (string, error) {
+				if name == "opencode" {
+					return "/usr/bin/opencode", nil
+				}
+				return "", fmt.Errorf("not found")
+			},
+			wantPath: "/usr/bin/opencode",
+		},
+		{
 			name:      "claude-code not found",
 			agentPath: "",
 			agentType: AgentTypeClaudeCode,
@@ -175,6 +194,13 @@ func TestLookupAgent(t *testing.T) {
 			agentType: AgentTypeGeminiCLI,
 			stub:      func(string) (string, error) { return "", fmt.Errorf("not found") },
 			wantErr:   "gemini not found",
+		},
+		{
+			name:      "opencode not found",
+			agentPath: "",
+			agentType: AgentTypeOpenCode,
+			stub:      func(string) (string, error) { return "", fmt.Errorf("not found") },
+			wantErr:   "opencode not found",
 		},
 		{
 			name:      "default type not found",

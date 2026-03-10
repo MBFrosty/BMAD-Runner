@@ -32,6 +32,15 @@ var DefaultModels = map[string]map[string]string{
 		"sprint-planning": "gemini-3-pro",
 		"default":         "gemini-3-pro",
 	},
+	AgentTypeOpenCode: {
+		"create-story":    "opencode-go/kimi-k2.5",
+		"dev-story":       "opencode-go/minimax-m2.5",
+		"code-review":     "opencode-go/kimi-k2.5",
+		"retrospective":   "opencode-go/kimi-k2.5",
+		"correct-course":  "opencode-go/glm-5",
+		"sprint-planning": "opencode-go/glm-5",
+		"default":         "opencode-go/kimi-k2.5",
+	},
 }
 
 // DefaultModel returns the default model name for the given agent type and workflow phase.

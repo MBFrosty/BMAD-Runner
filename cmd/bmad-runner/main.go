@@ -35,7 +35,7 @@ func main() {
 		&cli.StringFlag{
 			Name:    "agent-type",
 			Aliases: []string{"t"},
-			Usage:   "Agent backend: cursor-agent, claude-code, or gemini-cli",
+			Usage:   "Agent backend: cursor-agent, claude-code, gemini-cli, or opencode",
 			Value:   "cursor-agent",
 		},
 		&cli.StringFlag{
@@ -524,7 +524,12 @@ func runOneEpicPlanning(
 		return errEpicPlanningPrimeDirectiveCreated
 	}
 
-	pdContent, err := planner.ReadPrimeDirective(primeDirectivePath)
+
+	// Discover project files to ground the planning context in actual project state.
+	projectRoot, _, _ := config.ResolveProjectRoot(c.String("status-file"), c.String("project-root"))
+
+	// Read prime directive and NORTH_STAR.md (concatenated if both exist)
+	pdContent, err := planner.ReadPrimeDirectiveWithNorthStar(primeDirectivePath, projectRoot)
 	if err != nil {
 		return fmt.Errorf("reading prime directive: %w", err)
 	}
@@ -537,8 +542,6 @@ func runOneEpicPlanning(
 	maxNewEpics := c.Int("max-new-epics")
 	ui.PrintEpicPlanningBanner(primeDirectivePath, nextEpicNum, maxNewEpics)
 
-	// Discover project files to ground the planning context in actual project state.
-	projectRoot, _, _ := config.ResolveProjectRoot(c.String("status-file"), c.String("project-root"))
 	epicsFile := planner.FindEpicsFile(projectRoot)
 	retroFiles := planner.FindRetroFiles(projectRoot, 2) // include at most last 2 retros
 
@@ -695,6 +698,8 @@ func resolveAgentType(s string) string {
 		return config.AgentTypeClaudeCode
 	case config.AgentTypeGeminiCLI:
 		return config.AgentTypeGeminiCLI
+	case config.AgentTypeOpenCode:
+		return config.AgentTypeOpenCode
 	default:
 		return config.AgentTypeCursorAgent
 	}

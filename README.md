@@ -19,6 +19,7 @@ Orchestrate BMAD workflow phases (`create-story` → `dev-story` → `code-revie
   - `cursor-agent` CLI (usually in `~/.local/bin/agent`)
   - `claude` CLI ([Claude Code](https://code.claude.com))
   - `gemini` CLI ([Gemini CLI](https://github.com/google-gemini/gemini-cli))
+  - `opencode` CLI ([OpenCode](https://github.com/MBFrosty/OpenCode))
 
 ## Running
 
@@ -149,6 +150,7 @@ Valid options are:
 - `cursor-agent` (default)
 - `claude-code`
 - `gemini-cli`
+- `opencode`
 
 If the agent is not in your PATH, you can explicitly set its location using `--agent-path` (or `-a`).
 
@@ -162,6 +164,7 @@ Use the `--model` (or `-m`) flag to override the model used by the agent. If you
 | **`cursor-agent`** | `claude-4.6-sonnet-medium` | `composer-1.5` | `gemini-3-flash` | `claude-4.6-sonnet-medium` | `composer-1.5` |
 | **`claude-code`**| `sonnet` | `haiku` | `sonnet` | `sonnet` | `sonnet` |
 | **`gemini-cli`** | `gemini-3-pro` | `gemini-3-flash`| `gemini-3-pro` | `gemini-3-pro` | `gemini-3-pro` |
+| **`opencode`** | `opencode-go/kimi-k2.5` | `opencode-go/minimax-m2.5` | `opencode-go/kimi-k2.5` | `opencode-go/glm-5` | `opencode-go/kimi-k2.5` |
 
 Note: The `plan-epics` command runs the internal `correct-course` phase; the models in that column are used when you run `plan-epics`.
 ### Examples
@@ -181,6 +184,9 @@ Note: The `plan-epics` command runs the internal `correct-course` phase; the mod
 
 # Use gemini-cli with its default phase-specific models
 ./bin/bmad-runner --agent-type gemini-cli run auto
+
+# Use opencode with its default models
+./bin/bmad-runner --agent-type opencode run auto
 
 # Enable automated epic planning when all stories are done
 ./bin/bmad-runner --agent-type claude-code run auto --enable-epic-planning

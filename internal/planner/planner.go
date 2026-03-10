@@ -104,6 +104,37 @@ func ReadPrimeDirective(path string) (string, error) {
 	return string(data), nil
 }
 
+// ReadPrimeDirectiveWithNorthStar reads both the prime directive and the NORTH_STAR.md file.
+// It concatenates them with a separator. If NORTH_STAR.md doesn't exist, only the prime directive is returned.
+// Returns empty string if neither file exists.
+func ReadPrimeDirectiveWithNorthStar(primeDirectivePath, projectRoot string) (string, error) {
+	// Read prime directive
+	pdContent, err := ReadPrimeDirective(primeDirectivePath)
+	if err != nil {
+		return "", err
+	}
+
+	// Read NORTH_STAR.md from docs directory
+	northStarPath := filepath.Join(projectRoot, "docs", "NORTH_STAR.md")
+	northStarContent, err := os.ReadFile(northStarPath)
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("reading NORTH_STAR.md: %w", err)
+	}
+
+	// If both files exist, concatenate them
+	if pdContent != "" && northStarContent != nil {
+		return pdContent + "\n\n---\n\n# NORTH STAR\n\n" + string(northStarContent), nil
+	}
+
+	// If only NORTH_STAR.md exists, return it with a header
+	if pdContent == "" && northStarContent != nil {
+		return "# NORTH STAR\n\n" + string(northStarContent), nil
+	}
+
+	// Return just the prime directive (or empty string if neither exists)
+	return pdContent, nil
+}
+
 // IsDefaultPrimeDirective returns true if the content still looks like the unedited default.
 func IsDefaultPrimeDirective(content string) bool {
 	return strings.Contains(content, "(Fill in your project vision here)") ||

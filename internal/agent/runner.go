@@ -233,7 +233,9 @@ func (r *Runner) resolveCommandFile(phase string) string {
 
 	var preferred string
 	switch r.AgentType {
-	case "claude-code":
+	case "opencode":
+		preferred = filepath.Join(r.ProjectRoot, ".opencode", "commands", filename)
+case "claude-code":
 		preferred = filepath.Join(r.ProjectRoot, ".claude", "commands", filename)
 	default:
 		preferred = filepath.Join(r.ProjectRoot, ".cursor", "commands", filename)
@@ -289,6 +291,13 @@ func (r *Runner) runPrompt(prompt, phase, model string) error {
 			"--approval-mode", "yolo",
 			"--model", model,
 			"-p",
+			prompt,
+		)
+	case "opencode":
+		cmd = exec.Command(r.AgentPath,
+			"run",
+			"--model", model,
+			"--format", "json",
 			prompt,
 		)
 	default:

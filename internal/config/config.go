@@ -42,6 +42,7 @@ const (
 	AgentTypeCursorAgent = "cursor-agent"
 	AgentTypeClaudeCode  = "claude-code"
 	AgentTypeGeminiCLI   = "gemini-cli"
+	AgentTypeOpenCode    = "opencode"
 )
 
 // LookupAgent looks for the appropriate agent binary based on agentType.
@@ -57,6 +58,8 @@ func LookupAgent(agentPath string, agentType string) (string, error) {
 		names = []string{"claude"}
 	case AgentTypeGeminiCLI:
 		names = []string{"gemini"}
+	case AgentTypeOpenCode:
+		names = []string{"opencode"}
 	case AgentTypeCursorAgent:
 		fallthrough
 	default:
@@ -75,6 +78,8 @@ func LookupAgent(agentPath string, agentType string) (string, error) {
 		return "", fmt.Errorf("claude not found in PATH")
 	case AgentTypeGeminiCLI:
 		return "", fmt.Errorf("gemini not found in PATH")
+	case AgentTypeOpenCode:
+		return "", fmt.Errorf("opencode not found in PATH")
 	default:
 		return "", fmt.Errorf("cursor-agent or agent not found in PATH")
 	}
